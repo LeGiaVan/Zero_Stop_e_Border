@@ -252,6 +252,8 @@ CREATE POLICY "Users can insert own shipments"
   ON shipments FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own shipments" 
   ON shipments FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users can delete own shipments"
+  ON shipments FOR DELETE USING (auth.uid() = user_id);
 -- Cán bộ hải quan (inspector) hoặc admin được xem tất cả
 CREATE POLICY "Inspectors/Admins can view all shipments" 
   ON shipments FOR SELECT USING (
@@ -264,8 +266,18 @@ CREATE POLICY "Users can view documents of own shipments"
     user_id = auth.uid() OR 
     EXISTS (SELECT 1 FROM shipments WHERE id = documents.shipment_id AND user_id = auth.uid())
   );
-CREATE POLICY "Users can insert documents" 
-  ON documents FOR INSERT WITH CHECK (user_id = auth.uid());
+CREATE POLICY "Users can insert documents"
+  ON documents FOR INSERT
+  WITH CHECK (
+    auth.uid() IS NOT NULL
+    AND auth.uid() = user_id
+    AND shipment_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM shipments s
+      WHERE s.id = shipment_id
+        AND s.user_id = auth.uid()
+    )
+  );
 
 -- 4.4 Các bảng liên quan Shipment (declaration_items, tracking, border_scans)
 CREATE POLICY "Users can view items of own shipments" 
@@ -306,9 +318,11 @@ ON CONFLICT (config_key) DO NOTHING;
 CREATE POLICY "Users can insert declaration items for own shipments"
   ON declaration_items FOR INSERT
   WITH CHECK (
-    EXISTS (
+    shipment_id IS NOT NULL
+    AND EXISTS (
       SELECT 1 FROM shipments s
-      WHERE s.id = declaration_items.shipment_id AND s.user_id = auth.uid()
+      WHERE s.id = shipment_id
+        AND s.user_id = auth.uid()
     )
   );
 
@@ -393,3 +407,9 @@ CREATE POLICY "Admins can delete profiles"
       WHERE up.user_id = auth.uid() AND up.role = 'admin'
     )
   );
+
+-- ==============================================================================
+-- STORAGE (Supabase): không nằm trong schema public — chạy file migration riêng.
+-- Bucket mặc định app: "documents". Policies cho uploads declarations/<user_id>/...
+-- → supabase/migrations/20260204150000_storage_declarations_bucket_policies.sql
+-- ==============================================================================

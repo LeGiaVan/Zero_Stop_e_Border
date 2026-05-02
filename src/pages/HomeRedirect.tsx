@@ -24,7 +24,7 @@ function ProfileMissingNotice() {
     try {
       const row = await refreshAuthSession();
       if (!row) {
-        toast.error("We still couldn't load your profile. Try again or contact support.");
+        toast.error("Unable to load your account profile. Try again or contact support.");
       }
     } finally {
       setBusy(false);

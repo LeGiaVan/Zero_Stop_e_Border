@@ -25,7 +25,7 @@ export default function AccessDenied() {
     const row = await refreshAuthSession();
     navigate("/", { replace: true });
     if (!row) {
-      toast.error("We still couldn't load your profile. Try again or contact support.");
+      toast.error("Unable to load your account profile. Try again or contact support.");
     }
   }
 

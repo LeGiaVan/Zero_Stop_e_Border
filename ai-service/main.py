@@ -3,6 +3,10 @@ Run::
 
     cd ai-service
     uvicorn main:app --reload --port 8000
+
+After the Declaration UI saves shipments + documents, it POSTs to
+``/api/declaration/process-documents`` to extract PDFs and fill ``documents.extracted_data``
+and ``documents.mismatch_fields`` (requires OPENAI_API_KEY + SUPABASE_SERVICE_ROLE_KEY).
 """
 
 from __future__ import annotations

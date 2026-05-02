@@ -33,7 +33,15 @@ export default function AuthSignUp() {
     );
     setPending(false);
     if (error) {
-      toast.error(error.message);
+      const msg = error.message;
+      const lower = msg.toLowerCase();
+      const friendly =
+        lower.includes("already registered") || lower.includes("user already")
+          ? "An account with this email already exists. Sign in instead."
+          : msg.length > 140
+            ? "Unable to create account. Please try again."
+            : msg;
+      toast.error(friendly);
       return;
     }
     await refreshAuthSession();

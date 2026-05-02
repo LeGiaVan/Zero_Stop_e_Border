@@ -118,12 +118,15 @@ export async function uploadDeclarationDocument(
   if (!supabase) {
     throw new Error("Supabase chưa cấu hình.");
   }
+  const lower = file.name?.toLowerCase() ?? "";
+  if (!lower.endsWith(".pdf")) {
+    throw new Error("Declaration attachments must be PDF files.");
+  }
+
   const bucket = getVerificationBucket();
   const safe = sanitizeFilename(file.name);
   const path = `declarations/${userId}/${uniqueObjectKey()}_${safe}`;
-  const contentType =
-    file.type ||
-    (safe.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream");
+  const contentType = file.type?.trim() || "application/pdf";
 
   const { error: uploadError } = await supabase.storage.from(bucket).upload(path, file, {
     contentType,
@@ -131,7 +134,10 @@ export async function uploadDeclarationDocument(
   });
 
   if (uploadError) {
-    throw new Error(`Upload chứng từ thất bại: ${uploadError.message}`);
+    throw new Error(
+      `Declaration upload failed (${bucket}): ${uploadError.message}. ` +
+        "If this mentions RLS, row-level security, or policy, add Storage policies — see supabase/migrations/20260204150000_storage_declarations_bucket_policies.sql"
+    );
   }
 
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
