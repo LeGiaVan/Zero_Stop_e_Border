@@ -26,7 +26,7 @@ import {
   Package,
   Files,
   ListOrdered,
-  MapPinned,
+  Building2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
@@ -55,20 +55,6 @@ const STATUS_LABELS: Record<(typeof SHIPMENT_STATUSES)[number], string> = {
   in_transit: "In transit",
   delivered: "Delivered",
   cancelled: "Cancelled",
-};
-
-const RISK_LEVELS = ["low", "medium", "high"] as const;
-const RISK_LABELS: Record<(typeof RISK_LEVELS)[number], string> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-};
-
-const SEAL_STATUSES = ["intact", "broken", "verified"] as const;
-const SEAL_LABELS: Record<(typeof SEAL_STATUSES)[number], string> = {
-  intact: "Intact",
-  broken: "Broken",
-  verified: "Verified",
 };
 
 const DOC_TYPES = [
@@ -129,39 +115,49 @@ function friendlySaveError(err: unknown): string {
 
 interface ShipmentForm {
   shipment_number: string;
+  exporter_name: string;
+  importer_name: string;
   product_description: string;
   origin_country: string;
   destination_country: string;
   status: (typeof SHIPMENT_STATUSES)[number];
-  risk_score: string;
-  risk_level: (typeof RISK_LEVELS)[number];
-  risk_explanation: string;
-  clearance_time_hours: string;
   hs_code: string;
+  customs_regime: string;
+  customs_department: string;
+  transport_method: string;
+  bl_number: string;
+  total_packages: string;
+  total_gross_weight: string;
+  estimated_departure_date: string;
+  incoterms: string;
+  invoice_currency: string;
+  total_invoice_value: string;
+  payment_method: string;
   container_id: string;
-  license_plate: string;
-  seal_status: (typeof SEAL_STATUSES)[number];
-  current_lat: string;
-  current_lng: string;
 }
 
 function emptyShipment(): ShipmentForm {
   return {
     shipment_number: genShipmentNumber(),
+    exporter_name: "",
+    importer_name: "",
     product_description: "",
     origin_country: "",
     destination_country: "",
     status: "pending",
-    risk_score: "0",
-    risk_level: "low",
-    risk_explanation: "",
-    clearance_time_hours: "0",
     hs_code: "",
+    customs_regime: "",
+    customs_department: "",
+    transport_method: "",
+    bl_number: "",
+    total_packages: "",
+    total_gross_weight: "",
+    estimated_departure_date: "",
+    incoterms: "",
+    invoice_currency: "",
+    total_invoice_value: "",
+    payment_method: "",
     container_id: "",
-    license_plate: "",
-    seal_status: "intact",
-    current_lat: "0",
-    current_lng: "0",
   };
 }
 
@@ -169,6 +165,8 @@ interface DocRow {
   id: string;
   doc_type: DocType;
   file: File | null;
+  document_ref_number: string;
+  document_date: string;
 }
 
 interface ItemRow {
@@ -176,7 +174,9 @@ interface ItemRow {
   item_name: string;
   hs_code: string;
   quantity: string;
+  quantity_unit: string;
   unit_value: string;
+  taxable_value: string;
   country_of_origin: string;
   legal_references: string;
 }
@@ -200,7 +200,7 @@ export default function Declaration() {
 
   const [shipment, setShipment] = useState<ShipmentForm>(() => emptyShipment());
   const [documents, setDocuments] = useState<DocRow[]>([
-    { id: newRowId(), doc_type: "invoice", file: null },
+    { id: newRowId(), doc_type: "invoice", file: null, document_ref_number: "", document_date: "" },
   ]);
   const [items, setItems] = useState<ItemRow[]>([
     {
@@ -208,7 +208,9 @@ export default function Declaration() {
       item_name: "",
       hs_code: "",
       quantity: "",
+      quantity_unit: "",
       unit_value: "",
+      taxable_value: "",
       country_of_origin: "",
       legal_references: "",
     },
@@ -222,7 +224,10 @@ export default function Declaration() {
   }, []);
 
   const addDocRow = () =>
-    setDocuments((d) => [...d, { id: newRowId(), doc_type: "invoice", file: null }]);
+    setDocuments((d) => [
+      ...d,
+      { id: newRowId(), doc_type: "invoice", file: null, document_ref_number: "", document_date: "" },
+    ]);
 
   const removeDocRow = (id: string) =>
     setDocuments((d) => (d.length <= 1 ? d : d.filter((x) => x.id !== id)));
@@ -238,7 +243,9 @@ export default function Declaration() {
         item_name: "",
         hs_code: "",
         quantity: "",
+        quantity_unit: "",
         unit_value: "",
+        taxable_value: "",
         country_of_origin: "",
         legal_references: "",
       },
@@ -281,6 +288,25 @@ export default function Declaration() {
         toast.error("Add at least one line item with product name and HS code before submitting.");
         return;
       }
+      const req = [
+        [!shipment.exporter_name.trim(), "Enter the exporter name."],
+        [!shipment.importer_name.trim(), "Enter the importer / consignee name."],
+        [!shipment.customs_regime.trim(), "Select or enter the customs regime."],
+        [!shipment.transport_method.trim(), "Enter the mode of transport."],
+        [!shipment.incoterms.trim(), "Enter Incoterms (e.g. CIF, FOB)."],
+        [!shipment.invoice_currency.trim(), "Enter invoice currency (e.g. USD)."],
+      ] as const;
+      for (const [fail, msg] of req) {
+        if (fail) {
+          toast.error(msg);
+          return;
+        }
+      }
+      const tiv = parseFloat(shipment.total_invoice_value.replace(/,/g, ""));
+      if (!Number.isFinite(tiv) || tiv <= 0) {
+        toast.error("Enter a valid total invoice amount greater than zero.");
+        return;
+      }
     }
 
     setSaving(true);
@@ -299,7 +325,10 @@ export default function Declaration() {
         return;
       }
 
-      const rs = Math.min(100, Math.max(0, parseFloat(shipment.risk_score) || 0));
+      const pkg = parseFloat(shipment.total_packages.replace(/,/g, ""));
+      const gw = parseFloat(shipment.total_gross_weight.replace(/,/g, ""));
+      const tivNum = parseFloat(shipment.total_invoice_value.replace(/,/g, ""));
+      const depDate = shipment.estimated_departure_date.trim();
 
       const statusOnSave =
         mode === "draft"
@@ -311,20 +340,33 @@ export default function Declaration() {
       const shipPayload = {
         user_id: authUid,
         shipment_number: num,
+        exporter_name: shipment.exporter_name.trim() || null,
+        importer_name: shipment.importer_name.trim() || null,
         product_description: shipment.product_description.trim(),
         origin_country: shipment.origin_country.trim(),
         destination_country: shipment.destination_country.trim(),
         status: statusOnSave,
-        risk_score: rs,
-        risk_level: shipment.risk_level,
-        risk_explanation: shipment.risk_explanation.trim(),
-        clearance_time_hours: parseFloat(shipment.clearance_time_hours) || 0,
+        risk_score: 0,
+        risk_level: "low" as const,
+        risk_explanation: "",
+        clearance_time_hours: 0,
         hs_code: shipment.hs_code.trim(),
-        container_id: shipment.container_id.trim(),
-        license_plate: shipment.license_plate.trim(),
-        seal_status: shipment.seal_status,
-        current_lat: parseFloat(shipment.current_lat) || 0,
-        current_lng: parseFloat(shipment.current_lng) || 0,
+        container_id: shipment.container_id.trim() || "—",
+        license_plate: "",
+        seal_status: "intact" as const,
+        current_lat: 0,
+        current_lng: 0,
+        customs_regime: shipment.customs_regime.trim() || null,
+        customs_department: shipment.customs_department.trim() || null,
+        transport_method: shipment.transport_method.trim() || null,
+        bl_number: shipment.bl_number.trim() || null,
+        total_packages: Number.isFinite(pkg) ? pkg : null,
+        total_gross_weight: Number.isFinite(gw) ? gw : null,
+        estimated_departure_date: depDate || null,
+        incoterms: shipment.incoterms.trim() || null,
+        invoice_currency: shipment.invoice_currency.trim() || null,
+        total_invoice_value: Number.isFinite(tivNum) ? tivNum : null,
+        payment_method: shipment.payment_method.trim() || null,
       };
 
       const { data: shipRow, error: shipErr } = await supabase
@@ -342,6 +384,8 @@ export default function Declaration() {
         doc_type: DocType;
         file_name: string;
         file_url: string;
+        document_ref_number: string | null;
+        document_date: string | null;
         extracted_data: Record<string, never>;
         verification_status: string;
         mismatch_fields: unknown[];
@@ -350,12 +394,16 @@ export default function Declaration() {
       for (const doc of documents) {
         if (!doc.file) continue;
         const { file_name, file_url } = await uploadDeclarationDocument(authUid, doc.file);
+        const ref = doc.document_ref_number.trim();
+        const ddat = doc.document_date.trim();
         documentRows.push({
           shipment_id: shipmentId,
           user_id: authUid,
           doc_type: doc.doc_type,
           file_name,
           file_url,
+          document_ref_number: ref || null,
+          document_date: ddat || null,
           extracted_data: {},
           verification_status: "pending",
           mismatch_fields: [],
@@ -379,12 +427,18 @@ export default function Declaration() {
             legal = [];
           }
         }
+        const qtyUnit = row.quantity_unit.trim();
+        const tvRaw = row.taxable_value.replace(/,/g, "").trim();
+        const taxableParsed = tvRaw === "" ? null : parseFloat(tvRaw);
         return {
           shipment_id: shipmentId,
           item_name: row.item_name.trim(),
           hs_code: row.hs_code.trim(),
           quantity: parseFloat(row.quantity) || 0,
+          quantity_unit: qtyUnit || null,
           unit_value: parseFloat(row.unit_value) || 0,
+          taxable_value:
+            taxableParsed !== null && Number.isFinite(taxableParsed) ? taxableParsed : null,
           country_of_origin: row.country_of_origin.trim(),
           legal_references: legal,
         };
@@ -414,14 +468,16 @@ export default function Declaration() {
       }
 
       setShipment(emptyShipment());
-      setDocuments([{ id: newRowId(), doc_type: "invoice", file: null }]);
+      setDocuments([{ id: newRowId(), doc_type: "invoice", file: null, document_ref_number: "", document_date: "" }]);
       setItems([
         {
           id: newRowId(),
           item_name: "",
           hs_code: "",
           quantity: "",
+          quantity_unit: "",
           unit_value: "",
+          taxable_value: "",
           country_of_origin: "",
           legal_references: "",
         },
@@ -450,7 +506,7 @@ export default function Declaration() {
       <PageHeader
         eyebrow="Declarations"
         title="Customs declaration"
-        description="Capture shipment details, supporting documents, and line-level tariff information in one structured workflow."
+        description="Structured customs declaration: parties, regime and commercial terms, line items, and PDF attachments."
       />
 
       {!workspaceReady && (
@@ -473,12 +529,17 @@ export default function Declaration() {
                     Shipment overview
                   </CardTitle>
                   <CardDescription>
-                    Reference, routing, and goods description for this movement.
+                    Reference, exporter / importer, customs regime, commercial terms, and cargo totals needed for an
+                    import / export declaration.
                   </CardDescription>
                 </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-8 pt-6">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Package className="h-4 w-4 text-muted-foreground" />
+                Reference and parties
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2 md:col-span-2">
                   <Label htmlFor="shipment_number">Shipment reference</Label>
@@ -489,17 +550,35 @@ export default function Declaration() {
                     placeholder="e.g. SHP-…"
                     className="font-mono text-sm"
                   />
-                  <p className="text-xs text-muted-foreground">Must be unique across your workspace.</p>
+                  <p className="text-xs text-muted-foreground">Unique per workspace.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="exporter_name">Exporter / shipper</Label>
+                  <Input
+                    id="exporter_name"
+                    value={shipment.exporter_name}
+                    onChange={(e) => patchShipment({ exporter_name: e.target.value })}
+                    placeholder="Legal name on commercial documents"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="importer_name">Importer / consignee</Label>
+                  <Input
+                    id="importer_name"
+                    value={shipment.importer_name}
+                    onChange={(e) => patchShipment({ importer_name: e.target.value })}
+                    placeholder="Legal name of buyer / consignee"
+                  />
                 </div>
                 <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="product_description">Goods description</Label>
+                  <Label htmlFor="product_description">Goods description (summary)</Label>
                   <Textarea
                     id="product_description"
-                    rows={4}
+                    rows={3}
                     value={shipment.product_description}
                     onChange={(e) => patchShipment({ product_description: e.target.value })}
-                    placeholder="Materials, use, specifications, packaging…"
-                    className="resize-y min-h-[100px]"
+                    placeholder="Overall description of the consignment"
+                    className="resize-y min-h-[88px]"
                   />
                 </div>
                 <div className="space-y-2">
@@ -508,16 +587,16 @@ export default function Declaration() {
                     id="origin_country"
                     value={shipment.origin_country}
                     onChange={(e) => patchShipment({ origin_country: e.target.value })}
-                    placeholder="e.g. China"
+                    placeholder="e.g. Korea"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="destination_country">Destination</Label>
+                  <Label htmlFor="destination_country">Destination country / region</Label>
                   <Input
                     id="destination_country"
                     value={shipment.destination_country}
                     onChange={(e) => patchShipment({ destination_country: e.target.value })}
-                    placeholder="e.g. United States"
+                    placeholder="e.g. Vietnam"
                   />
                 </div>
                 <div className="space-y-2">
@@ -541,12 +620,12 @@ export default function Declaration() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="hs_code">Primary tariff code</Label>
+                  <Label htmlFor="hs_code">Header HS code (optional)</Label>
                   <Input
                     id="hs_code"
                     value={shipment.hs_code}
                     onChange={(e) => patchShipment({ hs_code: e.target.value })}
-                    placeholder="e.g. 8518.30.20"
+                    placeholder="e.g. 84213920"
                   />
                 </div>
               </div>
@@ -554,130 +633,141 @@ export default function Declaration() {
               <Separator />
 
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <MapPinned className="h-4 w-4 text-muted-foreground" />
-                Logistics &amp; equipment
+                <Building2 className="h-4 w-4 text-muted-foreground" />
+                Customs and commercial terms
               </div>
+              <p className="text-xs text-muted-foreground -mt-4">
+                Required for final submission: regime, transport, Incoterms, currency, and invoice total.
+              </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="container_id">Container</Label>
+                  <Label htmlFor="customs_regime">Customs regime</Label>
                   <Input
-                    id="container_id"
-                    value={shipment.container_id}
-                    onChange={(e) => patchShipment({ container_id: e.target.value })}
-                    placeholder="Identifier"
+                    id="customs_regime"
+                    value={shipment.customs_regime}
+                    onChange={(e) => patchShipment({ customs_regime: e.target.value })}
+                    placeholder="e.g. Import for production"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="license_plate">License plate</Label>
+                  <Label htmlFor="customs_department">Customs office / department</Label>
                   <Input
-                    id="license_plate"
-                    value={shipment.license_plate}
-                    onChange={(e) => patchShipment({ license_plate: e.target.value })}
-                    placeholder="Vehicle registration"
+                    id="customs_department"
+                    value={shipment.customs_department}
+                    onChange={(e) => patchShipment({ customs_department: e.target.value })}
+                    placeholder="Optional"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Seal condition</Label>
-                  <Select
-                    value={shipment.seal_status}
-                    onValueChange={(v) =>
-                      patchShipment({ seal_status: v as ShipmentForm["seal_status"] })
-                    }
-                  >
-                    <SelectTrigger className="bg-background">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SEAL_STATUSES.map((s) => (
-                        <SelectItem key={s} value={s}>
-                          {SEAL_LABELS[s]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="transport_method">Mode of transport</Label>
+                  <Input
+                    id="transport_method"
+                    value={shipment.transport_method}
+                    onChange={(e) => patchShipment({ transport_method: e.target.value })}
+                    placeholder="e.g. Sea, Air, Road"
+                  />
                 </div>
-                <div className="grid grid-cols-2 gap-3 md:col-span-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="current_lat">Latitude</Label>
-                    <Input
-                      id="current_lat"
-                      type="number"
-                      step="any"
-                      value={shipment.current_lat}
-                      onChange={(e) => patchShipment({ current_lat: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="current_lng">Longitude</Label>
-                    <Input
-                      id="current_lng"
-                      type="number"
-                      step="any"
-                      value={shipment.current_lng}
-                      onChange={(e) => patchShipment({ current_lng: e.target.value })}
-                    />
-                  </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bl_number">B/L or AWB reference</Label>
+                  <Input
+                    id="bl_number"
+                    value={shipment.bl_number}
+                    onChange={(e) => patchShipment({ bl_number: e.target.value })}
+                    placeholder="Bill of lading or airway bill number"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="incoterms">Incoterms</Label>
+                  <Input
+                    id="incoterms"
+                    value={shipment.incoterms}
+                    onChange={(e) => patchShipment({ incoterms: e.target.value })}
+                    placeholder="e.g. CIF, FOB"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="payment_method">Payment terms</Label>
+                  <Input
+                    id="payment_method"
+                    value={shipment.payment_method}
+                    onChange={(e) => patchShipment({ payment_method: e.target.value })}
+                    placeholder="e.g. L/C, T/T"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="invoice_currency">Invoice currency</Label>
+                  <Input
+                    id="invoice_currency"
+                    value={shipment.invoice_currency}
+                    onChange={(e) => patchShipment({ invoice_currency: e.target.value })}
+                    placeholder="e.g. USD"
+                    className="uppercase"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="total_invoice_value">Total invoice value</Label>
+                  <Input
+                    id="total_invoice_value"
+                    type="text"
+                    inputMode="decimal"
+                    value={shipment.total_invoice_value}
+                    onChange={(e) => patchShipment({ total_invoice_value: e.target.value })}
+                    placeholder="e.g. 100000.00"
+                  />
                 </div>
               </div>
 
               <Separator />
 
-              {/* <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="text-sm font-medium text-foreground">Cargo totals and logistics</div>
+              <p className="text-xs text-muted-foreground -mt-4">
+                Optional unless your procedure requires packages, gross weight, or equipment IDs.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Risk band</Label>
-                  <Select
-                    value={shipment.risk_level}
-                    onValueChange={(v) =>
-                      patchShipment({ risk_level: v as ShipmentForm["risk_level"] })
-                    }
-                  >
-                    <SelectTrigger className="bg-background">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {RISK_LEVELS.map((r) => (
-                        <SelectItem key={r} value={r}>
-                          {RISK_LABELS[r]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="risk_score">Risk score</Label>
+                  <Label htmlFor="total_packages">Total packages</Label>
                   <Input
-                    id="risk_score"
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.01}
-                    value={shipment.risk_score}
-                    onChange={(e) => patchShipment({ risk_score: e.target.value })}
+                    id="total_packages"
+                    type="text"
+                    inputMode="decimal"
+                    value={shipment.total_packages}
+                    onChange={(e) => patchShipment({ total_packages: e.target.value })}
+                    placeholder="e.g. 120"
                   />
-                  <p className="text-xs text-muted-foreground">Scale from 0 to 100.</p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="clearance_time_hours">Clearance time</Label>
+                  <Label htmlFor="total_gross_weight">Total gross weight</Label>
                   <Input
-                    id="clearance_time_hours"
-                    type="number"
-                    step={0.01}
-                    value={shipment.clearance_time_hours}
-                    onChange={(e) => patchShipment({ clearance_time_hours: e.target.value })}
-                  />
-                  <p className="text-xs text-muted-foreground">Hours from filing to release.</p>
-                </div>
-                <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="risk_explanation">Risk narrative</Label>
-                  <Textarea
-                    id="risk_explanation"
-                    rows={3}
-                    value={shipment.risk_explanation}
-                    onChange={(e) => patchShipment({ risk_explanation: e.target.value })}
-                    placeholder="Summarize rationale for the assessed risk level."
+                    id="total_gross_weight"
+                    type="text"
+                    inputMode="decimal"
+                    value={shipment.total_gross_weight}
+                    onChange={(e) => patchShipment({ total_gross_weight: e.target.value })}
+                    placeholder="kg"
                   />
                 </div>
-              </div> */}
+                <div className="space-y-2">
+                  <Label htmlFor="estimated_departure_date">Estimated departure / shipment date</Label>
+                  <Input
+                    id="estimated_departure_date"
+                    type="date"
+                    value={shipment.estimated_departure_date}
+                    onChange={(e) => patchShipment({ estimated_departure_date: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="container_id">Container / equipment ID</Label>
+                  <Input
+                    id="container_id"
+                    value={shipment.container_id}
+                    onChange={(e) => patchShipment({ container_id: e.target.value })}
+                    placeholder="Leave blank if not applicable"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Saved as “—” when empty to satisfy required equipment fields on some deployments.
+                  </p>
+                </div>
+              </div>
             </CardContent>
           </Card>
 
@@ -694,8 +784,8 @@ export default function Declaration() {
                       Supporting documents
                     </CardTitle>
                     <CardDescription>
-                      Attach PDF invoices, packing lists, certificates, or transport documents. Files are stored
-                      securely and verified automatically after you save or submit.
+                      Attach PDF invoices, packing lists, certificates, or transport documents. Optionally record each
+                      document&apos;s reference number and date to align with customs filings.
                     </CardDescription>
                   </div>
                 </div>
@@ -712,45 +802,67 @@ export default function Declaration() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4 pt-6">
-              {documents.map((doc, index) => (
+              {documents.map((doc) => (
                 <div
                   key={doc.id}
                   className="rounded-xl border border-border/60 bg-background/50 p-4 flex flex-col lg:flex-row lg:items-end gap-4"
                 >
-                  <div className="space-y-2 flex-1 min-w-0">
-                    <Label className="text-muted-foreground">Document type</Label>
-                    <Select
-                      value={doc.doc_type}
-                      onValueChange={(v) =>
-                        updateDocRow(doc.id, { doc_type: v as DocType })
-                      }
-                    >
-                      <SelectTrigger className="bg-background">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {DOC_TYPES.map((t) => (
-                          <SelectItem key={t} value={t}>
-                            {DOC_LABELS[t]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2 flex-[1.5] min-w-0">
-                    <Label className="text-muted-foreground">
-                      File {index + 1}
-                    </Label>
-                    <Input
-                      type="file"
-                      accept=".pdf,application/pdf"
-                      className="cursor-pointer bg-background"
-                      onChange={(e) =>
-                        updateDocRow(doc.id, {
-                          file: e.target.files?.[0] ?? null,
-                        })
-                      }
-                    />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1 min-w-0">
+                    <div className="space-y-2 md:col-span-2">
+                      <Label className="text-muted-foreground">Document type</Label>
+                      <Select
+                        value={doc.doc_type}
+                        onValueChange={(v) =>
+                          updateDocRow(doc.id, { doc_type: v as DocType })
+                        }
+                      >
+                        <SelectTrigger className="bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {DOC_TYPES.map((t) => (
+                            <SelectItem key={t} value={t}>
+                              {DOC_LABELS[t]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-muted-foreground">Document reference no.</Label>
+                      <Input
+                        value={doc.document_ref_number}
+                        onChange={(e) =>
+                          updateDocRow(doc.id, { document_ref_number: e.target.value })
+                        }
+                        placeholder="Invoice / B/L number"
+                        className="bg-background"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-muted-foreground">Document date</Label>
+                      <Input
+                        type="date"
+                        value={doc.document_date}
+                        onChange={(e) =>
+                          updateDocRow(doc.id, { document_date: e.target.value })
+                        }
+                        className="bg-background"
+                      />
+                    </div>
+                    <div className="space-y-2 md:col-span-2">
+                      <Label className="text-muted-foreground">PDF file</Label>
+                      <Input
+                        type="file"
+                        accept=".pdf,application/pdf"
+                        className="cursor-pointer bg-background"
+                        onChange={(e) =>
+                          updateDocRow(doc.id, {
+                            file: e.target.files?.[0] ?? null,
+                          })
+                        }
+                      />
+                    </div>
                   </div>
                   <Button
                     type="button"
@@ -781,8 +893,8 @@ export default function Declaration() {
                       Declaration line items
                     </CardTitle>
                     <CardDescription>
-                      Rows that include both a product description and a tariff code are saved with your declaration.
-                      Extended values are calculated automatically from quantity and unit value.
+                      Each saved row includes product description and tariff code. Quantity unit and taxable value are
+                      optional; extended totals derive from quantity × unit value where applicable.
                     </CardDescription>
                   </div>
                 </div>
@@ -859,6 +971,14 @@ export default function Declaration() {
                       />
                     </div>
                     <div className="space-y-2">
+                      <Label>Quantity unit</Label>
+                      <Input
+                        value={row.quantity_unit}
+                        onChange={(e) => updateItemRow(row.id, { quantity_unit: e.target.value })}
+                        placeholder="e.g. PCS, kg"
+                      />
+                    </div>
+                    <div className="space-y-2">
                       <Label>Unit value</Label>
                       <Input
                         type="number"
@@ -867,6 +987,16 @@ export default function Declaration() {
                         value={row.unit_value}
                         onChange={(e) => updateItemRow(row.id, { unit_value: e.target.value })}
                         placeholder="49.00"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Taxable value (optional)</Label>
+                      <Input
+                        type="text"
+                        inputMode="decimal"
+                        value={row.taxable_value}
+                        onChange={(e) => updateItemRow(row.id, { taxable_value: e.target.value })}
+                        placeholder="Per local rules"
                       />
                     </div>
                     <div className="space-y-2 md:col-span-2">
@@ -888,19 +1018,6 @@ export default function Declaration() {
           </Card>
 
           <div className="flex flex-col sm:flex-row justify-end gap-3 pt-2">
-            <Button
-              variant="outline"
-              disabled={saving || !workspaceReady}
-              className="gap-2 min-w-[140px]"
-              onClick={() => void persist("draft")}
-            >
-              {saving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
-              Save draft
-            </Button>
             <Button
               className="bg-gradient-ocean shadow-glow gap-2 min-w-[160px]"
               disabled={saving || !workspaceReady}

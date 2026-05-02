@@ -112,6 +112,8 @@ def normalize_stored_extracted(ed: dict[str, Any]) -> dict[str, Any]:
 def shipment_declaration_fields(
     shipment: dict[str, Any], items: list[dict[str, Any]]
 ) -> list[dict[str, str | None]]:
+    """Build comparable declaration-side fields without duplicate shipment/line noise."""
+
     fields: list[dict[str, str | None]] = []
 
     def add(label: str, val: Any) -> None:
@@ -122,16 +124,53 @@ def shipment_declaration_fields(
             return
         fields.append({"label": label, "value": s})
 
-    add("HS Code", shipment.get("hs_code"))
     add("Goods Description", shipment.get("product_description"))
-    add("Country of Origin", shipment.get("origin_country"))
 
-    for row in items:
+    ship_origin = (shipment.get("origin_country") or "").strip()
+    items_list = list(items)
+
+    if not items_list:
+        if ship_origin:
+            add("Country of Origin", ship_origin)
+        add("HS Code", shipment.get("hs_code"))
+        return fields
+
+    if len(items_list) == 1:
+        row = items_list[0]
+        line_origin = (row.get("country_of_origin") or "").strip()
+        origin_display = ship_origin or line_origin
+        if origin_display:
+            add("Country of Origin", origin_display)
         add("HS Code", row.get("hs_code"))
         add("Quantity", row.get("quantity"))
-        add("Declared Value", row.get("unit_value"))
-        add("Country of Origin", row.get("country_of_origin"))
-        add("Exporter", row.get("item_name"))
+        add("Unit value", row.get("unit_value"))
+        tv = row.get("total_value")
+        if tv is not None:
+            add("Line total", tv)
+        return fields
+
+    non_empty_co = [(row.get("country_of_origin") or "").strip() for row in items_list]
+    distinct_line_origins = {o for o in non_empty_co if o}
+
+    origin_singleton: str | None = None
+    if ship_origin:
+        origin_singleton = ship_origin
+    elif len(distinct_line_origins) == 1:
+        origin_singleton = next(iter(distinct_line_origins))
+
+    if origin_singleton:
+        add("Country of Origin", origin_singleton)
+
+    for row in items_list:
+        add("HS Code", row.get("hs_code"))
+        add("Quantity", row.get("quantity"))
+        add("Unit value", row.get("unit_value"))
+        co = (row.get("country_of_origin") or "").strip()
+        if origin_singleton:
+            if co and co.casefold() != origin_singleton.casefold():
+                add("Country of Origin", co)
+        elif co:
+            add("Country of Origin", co)
 
     return fields
 

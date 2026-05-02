@@ -11,10 +11,15 @@ from app.models.schemas import ComparisonRow, MatchLevel, OverallFlag, RiskStatu
 
 
 LABEL_TO_KEYS: dict[str, tuple[str, ...]] = {
+    "Goods Description": ("goods_description",),
     "Exporter": ("shipper_exporter",),
     "HS Code": ("hs_code",),
     "Quantity": ("quantity",),
-    "Declared Value": ("total_amount",),
+    # Declaration unit_value ↔ invoice unit_price (not invoice total_amount).
+    "Unit value": ("unit_price",),
+    # Legacy uploads may still send this label — prefer unit_price, avoid matching header total first alone.
+    "Declared Value": ("unit_price", "total_amount"),
+    "Line total": ("total_amount",),
     "Country of Origin": ("country_of_origin",),
     "Net Weight": ("net_weight",),
     "Gross Weight": ("gross_weight",),
@@ -44,6 +49,19 @@ def parse_money_value(s: str) -> float | None:
         return None
 
 
+def parse_quantity_number(s: str) -> float | None:
+    """Strip unit suffixes like `500 units`, `500 PCS`, compare numeric core only."""
+    if not s:
+        return None
+    m = re.search(r"[-+]?\d[\d,]*(?:\.\d+)?", str(s))
+    if not m:
+        return None
+    try:
+        return float(m.group(0).replace(",", ""))
+    except ValueError:
+        return None
+
+
 def fuzzy_ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
@@ -57,15 +75,21 @@ def pick_extracted_for_label(label: str, normalized_merged: dict[str, Any]) -> s
             return None
         if isinstance(value, list):
             return ", ".join(str(v) for v in value) if value else None
-        return str(value)
+        text = str(value).strip()
+        return text if text else None
 
     for key in keys:
         value = normalized_merged.get(key)
         if value is None:
             continue
         if key == "container_numbers" and isinstance(value, list):
-            return ", ".join(str(v) for v in value) if value else None
-        return str(value)
+            joined = ", ".join(str(v) for v in value if str(v).strip())
+            if joined:
+                return joined
+            continue
+        text = str(value).strip()
+        if text:
+            return text
     return None
 
 
@@ -82,7 +106,31 @@ def compare_field(label: str, declared: str | None, extracted: str | None) -> Ma
     if ll in ("hs code", "h.s. code"):
         return "valid" if normalize_hs_code(d) == normalize_hs_code(e) else "fraud"
 
-    if ll in ("declared value", "total amount", "invoice total", "amount"):
+    if ll == "quantity":
+        pd, pe = parse_quantity_number(d), parse_quantity_number(e)
+        if pd is not None and pe is not None:
+            if abs(pd - pe) <= max(1e-9, abs(pd) * 1e-12):
+                return "valid"
+            denom = max(abs(pd), abs(pe), 1e-9)
+            rel = abs(pd - pe) / denom
+            return "fraud" if rel > 0.05 else "warning"
+
+    if ll in ("goods description",):
+        nd, ne = _normalize_ws(d), _normalize_ws(e)
+        if nd == ne:
+            return "valid"
+        # One side often shorter (declaration summary vs full OCR line).
+        if len(nd) >= 12 and nd in ne:
+            return "valid"
+        if len(ne) >= 12 and ne in nd:
+            return "valid"
+        if nd in ne or ne in nd:
+            return "warning"
+        if fuzzy_ratio(nd, ne) >= 0.82:
+            return "warning"
+        return "fraud"
+
+    if ll in ("declared value", "total amount", "invoice total", "amount", "unit value", "line total"):
         pd, pe = parse_money_value(d), parse_money_value(e)
         if pd is not None and pe is not None and pd > 0:
             rel = abs(pd - pe) / pd
@@ -112,6 +160,19 @@ def compare_field(label: str, declared: str | None, extracted: str | None) -> Ma
     return "fraud"
 
 
+def _dedupe_comparison_rows(rows: list[ComparisonRow]) -> list[ComparisonRow]:
+    """Drop duplicate rows (same label + declared + extracted + match), preserve order."""
+    seen: set[tuple[str, str | None, str | None, str]] = set()
+    out: list[ComparisonRow] = []
+    for r in rows:
+        key = (r.label, r.declared, r.extracted, r.match)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 def build_comparison_rows(
     declaration_fields: list[dict[str, str | None]],
     normalized_merged: dict[str, Any],
@@ -131,7 +192,7 @@ def build_comparison_rows(
                 match=compare_field(label, declared, extracted),
             )
         )
-    return rows
+    return _dedupe_comparison_rows(rows)
 
 
 def summarize_rows(rows: list[ComparisonRow]) -> tuple[int, int, int, OverallFlag]:

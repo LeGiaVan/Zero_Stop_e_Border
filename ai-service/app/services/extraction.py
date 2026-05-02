@@ -33,8 +33,10 @@ DOC_PRIORITY: dict[str, int] = {
 EMPTY_CANONICAL_BASE: dict[str, Any] = {
     "shipper_exporter": None,
     "consignee_buyer": None,
+    "goods_description": None,
     "hs_code": None,
     "quantity": None,
+    "unit_price": None,
     "total_amount": None,
     "country_of_origin": None,
     "net_weight": None,
@@ -167,10 +169,12 @@ def llm_to_canonical(llm_obj: dict[str, Any], doc_type: str) -> dict[str, Any]:
     """Map extraction schema fields to compare-ready canonical fields."""
     canonical = dict(EMPTY_CANONICAL_BASE)
     if doc_type == "bill_of_lading":
+        canonical["goods_description"] = _to_text(llm_obj.get("cargo_description"))
         canonical["shipper_exporter"] = llm_obj.get("shipper_name")
         canonical["consignee_buyer"] = llm_obj.get("consignee")
         canonical["hs_code"] = _to_text(llm_obj.get("hs_code"))
         canonical["quantity"] = _to_text(llm_obj.get("package_quantity"))
+        canonical["unit_price"] = None
         canonical["total_amount"] = None
         canonical["country_of_origin"] = llm_obj.get("origin")
         canonical["net_weight"] = _to_text(llm_obj.get("net_weight"))
@@ -181,13 +185,16 @@ def llm_to_canonical(llm_obj: dict[str, Any], doc_type: str) -> dict[str, Any]:
         return canonical
 
     if doc_type == "commercial_invoice":
+        canonical["goods_description"] = _to_text(llm_obj.get("goods_description"))
         canonical["shipper_exporter"] = llm_obj.get("seller_name")
         canonical["consignee_buyer"] = llm_obj.get("buyer_name")
         canonical["hs_code"] = _extract_hs_from_text(llm_obj.get("goods_description"))
         canonical["quantity"] = _to_text(llm_obj.get("quantity"))
+        canonical["unit_price"] = _to_text(llm_obj.get("unit_price"))
         canonical["total_amount"] = _to_text(llm_obj.get("total_amount"))
-        canonical["country_of_origin"] = _extract_origin_from_text(
-            llm_obj.get("goods_description")
+        canonical["country_of_origin"] = (
+            _extract_origin_from_text(llm_obj.get("goods_description"))
+            or _origin_hint_from_seller(llm_obj)
         )
         canonical["net_weight"] = None
         canonical["gross_weight"] = None
@@ -197,10 +204,12 @@ def llm_to_canonical(llm_obj: dict[str, Any], doc_type: str) -> dict[str, Any]:
         return canonical
 
     if doc_type == "packing_list":
+        canonical["goods_description"] = _to_text(llm_obj.get("goods_description"))
         canonical["shipper_exporter"] = llm_obj.get("seller_name")
         canonical["consignee_buyer"] = llm_obj.get("buyer_name")
         canonical["hs_code"] = _extract_hs_from_text(llm_obj.get("goods_description"))
         canonical["quantity"] = _to_text(llm_obj.get("quantity"))
+        canonical["unit_price"] = _to_text(llm_obj.get("unit_price"))
         canonical["total_amount"] = _to_text(llm_obj.get("total_amount"))
         canonical["country_of_origin"] = llm_obj.get("origin")
         canonical["net_weight"] = None
@@ -210,10 +219,14 @@ def llm_to_canonical(llm_obj: dict[str, Any], doc_type: str) -> dict[str, Any]:
         canonical["invoice_number"] = _to_text(llm_obj.get("invoice_number"))
         return canonical
 
+    canonical["goods_description"] = _to_text(llm_obj.get("goods_description"))
     canonical["shipper_exporter"] = llm_obj.get("seller_name")
     canonical["consignee_buyer"] = llm_obj.get("buyer_name")
+    canonical["hs_code"] = _extract_hs_from_text(llm_obj.get("goods_description"))
     canonical["quantity"] = _to_text(llm_obj.get("quantity"))
+    canonical["unit_price"] = _to_text(llm_obj.get("unit_price"))
     canonical["total_amount"] = _to_text(llm_obj.get("total_amount"))
+    canonical["country_of_origin"] = _extract_origin_from_text(llm_obj.get("goods_description"))
     canonical["bl_number"] = _to_text(llm_obj.get("bl_number"))
     canonical["invoice_number"] = _to_text(llm_obj.get("invoice_number"))
     return canonical
@@ -336,6 +349,22 @@ def _extract_origin_from_text(text: Any) -> str | None:
         return None
     match = re.search(r"origin[:\s]+([A-Za-z ]+)", source, flags=re.IGNORECASE)
     return match.group(1).strip() if match else None
+
+
+def _origin_hint_from_seller(llm_obj: dict[str, Any]) -> str | None:
+    """When invoice lacks explicit origin, infer likely manufacturing/jurisdiction hint from seller address."""
+    addr = (_to_text(llm_obj.get("seller_address")) or "").lower()
+    if not addr:
+        return None
+    if any(x in addr for x in ("korea", "seoul", "busan", "incheon")):
+        return "Korea"
+    if "vietnam" in addr or "ho chi minh" in addr or "hanoi" in addr:
+        return "Vietnam"
+    if "china" in addr or "shanghai" in addr or "shenzhen" in addr:
+        return "China"
+    if "japan" in addr or "tokyo" in addr:
+        return "Japan"
+    return None
 
 
 def process_pdf(
