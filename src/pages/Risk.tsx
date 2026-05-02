@@ -59,7 +59,7 @@ export default function Risk() {
           </div>
           <div className="bg-white/10 backdrop-blur rounded-xl p-5 space-y-3 text-sm leading-relaxed">
             <p>
-              <strong className="text-warning">⚠ Critical:</strong> The declared value of <strong>$24,500</strong> is
+              <strong className="text-warning">Critical:</strong> The declared value of <strong>$24,500</strong> is
               <strong> 27% lower</strong> than the median market price for similar pharmaceutical shipments from this
               origin (HS 3004.90). This is the strongest risk signal.
             </p>

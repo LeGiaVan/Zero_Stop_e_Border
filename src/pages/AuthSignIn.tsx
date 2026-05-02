@@ -23,7 +23,17 @@ export default function AuthSignIn() {
     const { error } = await signIn(email.trim(), password);
     setPending(false);
     if (error) {
-      toast.error(error.message);
+      const msg = error.message;
+      const lower = msg.toLowerCase();
+      const friendly =
+        lower.includes("invalid login credentials") || lower.includes("invalid credentials")
+          ? "Incorrect email or password."
+          : lower.includes("email not confirmed")
+            ? "Confirm your email address before signing in."
+            : msg.length > 140
+              ? "Unable to sign in. Please try again."
+              : msg;
+      toast.error(friendly);
       return;
     }
     toast.success("Signed in successfully.");

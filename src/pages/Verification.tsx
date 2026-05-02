@@ -161,6 +161,17 @@ function buildExtractionTableRows(extracted: unknown): { label: string; value: s
   return rows;
 }
 
+function documentsLoadErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) return "Unable to load documents. Please try again.";
+  const m = err.message.toLowerCase();
+  if (m.includes("not configured")) return "Workspace connection is not available. Contact your administrator.";
+  if (m.includes("jwt") || m.includes("session")) return "Your session could not be validated. Sign in again and retry.";
+  if (m.includes("permission") || m.includes("policy") || m.includes("rls") || m.includes("row-level"))
+    return "You do not have permission to view these documents.";
+  if (m.includes("failed to fetch") || m.includes("network")) return "Network error. Check your connection and try again.";
+  return "Unable to load documents. Please try again.";
+}
+
 function normalizeShipmentJoin(raw: unknown): { shipment_number: string } | null {
   if (Array.isArray(raw)) {
     const first = raw[0];
@@ -220,16 +231,20 @@ export default function Verification() {
   async function handleRescan() {
     const sid = selected?.shipment_id;
     if (!sid) {
-      toast.error("No shipment linked to this document.");
+      toast.error("This document is not linked to a shipment.", {
+        description: "Submit it from Customs declaration with supporting files attached.",
+      });
       return;
     }
     try {
       await requestDeclarationDocumentProcessing(sid);
       await queryClient.invalidateQueries({ queryKey: ["verification", "documents"] });
-      toast.success("Re-processing complete.");
+      toast.success("Document verification updated.");
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast.error("Re-scan failed.", { description: msg.slice(0, 280) });
+      console.warn("[verification] Re-scan:", e);
+      toast.error("Unable to re-run verification.", {
+        description: "Please try again shortly or contact support if the issue persists.",
+      });
     }
   }
 
@@ -237,12 +252,13 @@ export default function Verification() {
     return (
       <>
         <PageHeader
-          eyebrow="AI Verification"
+          eyebrow="Document verification"
           title="Document Verification"
-          description="Connect your workspace to load documents from Supabase."
+          description="Review extracted fields and compare them with declared values."
         />
         <p className="text-sm text-muted-foreground rounded-xl border border-border/60 bg-muted/30 px-4 py-3">
-          Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to view verification results.
+          This screen requires your organization&apos;s workspace to be configured. Contact your administrator if you
+          expected access here.
         </p>
       </>
     );
@@ -253,9 +269,9 @@ export default function Verification() {
   return (
     <>
       <PageHeader
-        eyebrow="AI Verification"
+        eyebrow="Document verification"
         title="Document Verification"
-        description="Live data from documents: verification status, comparison rows, and extracted payloads."
+        description="Verification status, declaration comparison, and key fields extracted from supporting documents."
         actions={
           <Button
             type="button"
@@ -271,7 +287,7 @@ export default function Verification() {
 
       {isError && (
         <p className="mb-6 text-sm text-destructive rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
-          {error instanceof Error ? error.message : "Could not load documents."}
+          {documentsLoadErrorMessage(error)}
         </p>
       )}
 
@@ -288,22 +304,23 @@ export default function Verification() {
           <div className="text-3xl font-bold mt-1.5">{data.length}</div>
         </div>
         <div className="bg-success-soft border border-success/20 rounded-2xl p-5 shadow-card">
-          <div className="text-xs uppercase tracking-wider text-success font-semibold">Matches (selection)</div>
+          <div className="text-xs uppercase tracking-wider text-success font-semibold">Matching fields</div>
           <div className="text-3xl font-bold mt-1.5 text-success">{selected ? rowStats.valid : "—"}</div>
         </div>
         <div className="bg-warning-soft border border-warning/30 rounded-2xl p-5 shadow-card">
-          <div className="text-xs uppercase tracking-wider text-warning-foreground font-semibold">Warnings</div>
+          <div className="text-xs uppercase tracking-wider text-warning-foreground font-semibold">Variances</div>
           <div className="text-3xl font-bold mt-1.5 text-warning-foreground">{selected ? rowStats.warning : "—"}</div>
         </div>
         <div className="bg-destructive-soft border border-destructive/20 rounded-2xl p-5 shadow-card">
-          <div className="text-xs uppercase tracking-wider text-destructive font-semibold">Critical</div>
+          <div className="text-xs uppercase tracking-wider text-destructive font-semibold">Critical issues</div>
           <div className="text-3xl font-bold mt-1.5 text-destructive">{selected ? rowStats.fraud : "—"}</div>
         </div>
       </div>
 
       {data.length === 0 ? (
         <div className="rounded-2xl border border-border/60 bg-muted/20 p-10 text-center text-muted-foreground text-sm">
-          No documents yet. Operators can submit declarations with PDFs; after the AI pipeline runs, rows appear here.
+          No supporting documents yet. Results appear here after declarations are submitted with PDF attachments and
+          verification completes.
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -349,16 +366,17 @@ export default function Verification() {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-10">
         <div className="bg-card rounded-2xl border border-border/60 shadow-card overflow-hidden">
           <div className="p-6 border-b border-border/60">
-            <h3 className="text-base font-semibold">Comparison</h3>
+            <h3 className="text-base font-semibold">Declaration comparison</h3>
             <p className="text-sm text-muted-foreground mt-0.5">
-              From <code className="text-xs bg-muted px-1 rounded">mismatch_fields</code> on the selected document.
+              Declared values versus values read from the selected document.
             </p>
           </div>
           {!selected ? (
             <p className="p-6 text-sm text-muted-foreground">Select a document above.</p>
           ) : comparisonRows.length === 0 ? (
             <p className="p-6 text-sm text-muted-foreground">
-              No comparison rows stored yet. Use Re-scan after the declaration pipeline has run.
+              No comparison data for this document yet. Use Re-scan after submitting supporting documents, or try again
+              in a moment if verification is still running.
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -429,7 +447,8 @@ export default function Verification() {
               <p className="p-4 text-sm text-muted-foreground">Select a document.</p>
             ) : extractionRows.length === 0 ? (
               <p className="p-4 text-sm text-muted-foreground">
-                No key fields yet. Save a declaration with PDFs and run the AI pipeline, or re-scan after processing.
+                No extracted fields available yet. Submit a declaration with PDF attachments, then use Re-scan if
+                needed.
               </p>
             ) : (
               <div className="overflow-x-auto">

@@ -113,7 +113,7 @@ function friendlySaveError(err: unknown): string {
     return "We couldn’t verify your session. Please refresh the page and try again.";
   }
   if (lower.includes("row-level security") || lower.includes("violates row-level")) {
-    return "Access blocked by security rules. On Supabase: run SQL migrations `20260204151000_shipments_insert_and_document_rls_fix.sql` (shipments INSERT + documents), and `20260204150000_storage_declarations_bucket_policies.sql` for PDF uploads.";
+    return "This action could not be completed due to account permissions or security policies. Contact your administrator.";
   }
   if (lower.includes("policy") || lower.includes("permission") || lower.includes("rls")) {
     return "You don’t have permission to complete this action. Contact your administrator.";
@@ -252,7 +252,7 @@ export default function Declaration() {
 
   async function persist(mode: "draft" | "submit") {
     if (!isSupabaseConfigured()) {
-      toast.error("Saving isn’t available until your workspace is connected.");
+      toast.error("Saving requires an active workspace connection.");
       return;
     }
 
@@ -273,12 +273,12 @@ export default function Declaration() {
 
     if (mode === "submit") {
       if (attachments.length === 0) {
-        toast.error("Submit requires at least one PDF attachment.");
+        toast.error("Attach at least one PDF before submitting.");
         return;
       }
       const hasLineItem = items.some((i) => i.item_name.trim() && i.hs_code.trim());
       if (!hasLineItem) {
-        toast.error("Submit requires at least one line item with product name and HS code.");
+        toast.error("Add at least one line item with product name and HS code before submitting.");
         return;
       }
     }
@@ -405,10 +405,10 @@ export default function Declaration() {
 
       if (documentRows.length > 0) {
         void requestDeclarationDocumentProcessing(shipmentId).catch((err: unknown) => {
-          const detail =
-            err instanceof Error ? err.message : "The AI service returned an error.";
-          toast.warning("Saved — AI extraction did not run.", {
-            description: detail.length > 420 ? `${detail.slice(0, 417)}…` : detail,
+          console.warn("[declaration] Automated verification:", err);
+          toast.warning("Declaration saved", {
+            description:
+              "Automated document verification did not finish. You can retry from Document Verification when convenient.",
           });
         });
       }
@@ -436,7 +436,7 @@ export default function Declaration() {
           .eq("id", shipmentId);
         if (rollbackErr) {
           suffix =
-            " Your shipment row could not be rolled back — apply Supabase migration `20260204140000_documents_declaration_items_insert_rls.sql`.";
+            " Related records may need to be reviewed by your administrator if this submission partially saved.";
         }
       }
       toast.error(friendlySaveError(e) + suffix);
@@ -455,7 +455,7 @@ export default function Declaration() {
 
       {!workspaceReady && (
         <p className="mb-6 text-sm text-muted-foreground rounded-xl border border-border/60 bg-muted/30 px-4 py-3">
-          Saving is disabled until your workspace connection is active. You can still review the form layout below.
+          Saving requires an active workspace connection. You may continue reviewing the form below.
         </p>
       )}
 
@@ -694,8 +694,8 @@ export default function Declaration() {
                       Supporting documents
                     </CardTitle>
                     <CardDescription>
-                      Attach PDF invoices, packing lists, certificates, or transport documents — files are stored in
-                      Supabase Storage and processed by the AI service after save.
+                      Attach PDF invoices, packing lists, certificates, or transport documents. Files are stored
+                      securely and verified automatically after you save or submit.
                     </CardDescription>
                   </div>
                 </div>

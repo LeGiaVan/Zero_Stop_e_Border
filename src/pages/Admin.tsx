@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -92,6 +92,15 @@ async function fetchAllProfiles(): Promise<UserProfileRow[]> {
   return (data ?? []) as UserProfileRow[];
 }
 
+function adminProfilesLoadMessage(err: unknown): string {
+  if (!(err instanceof Error)) return "Unable to load directory users. Please try again.";
+  const m = err.message.toLowerCase();
+  if (m.includes("not configured")) return "Workspace connection is not available.";
+  if (m.includes("permission") || m.includes("policy") || m.includes("jwt") || m.includes("row-level"))
+    return "You do not have permission to view directory users.";
+  return "Unable to load directory users. Please try again.";
+}
+
 function UserManagementBlock() {
   const queryClient = useQueryClient();
   const { profile: myProfile, refreshAuthSession } = useAuth();
@@ -142,7 +151,7 @@ function UserManagementBlock() {
       setEditing(null);
       if (variables.user_id === myUserId) await refreshAuthSession();
     },
-    onError: (e: Error) => toast.error(e.message || "Update failed."),
+    onError: () => toast.error("Unable to save profile changes. Please try again."),
   });
 
   const toggleActiveMutation = useMutation({
@@ -156,7 +165,7 @@ function UserManagementBlock() {
       invalidate();
       if (variables.user_id === myUserId) await refreshAuthSession();
     },
-    onError: (e: Error) => toast.error(e.message || "Could not update status."),
+    onError: () => toast.error("Unable to update account status. Please try again."),
   });
 
   const deleteMutation = useMutation({
@@ -172,7 +181,7 @@ function UserManagementBlock() {
       setRemoveTarget(null);
       if (variables.user_id === myUserId) await refreshAuthSession();
     },
-    onError: (e: Error) => toast.error(e.message || "Remove failed."),
+    onError: () => toast.error("Unable to remove profile. Please try again."),
   });
 
   function openEdit(row: UserProfileRow) {
@@ -196,7 +205,7 @@ function UserManagementBlock() {
     });
   }
 
-  const errMessage = error instanceof Error ? error.message : "Could not load users.";
+  const profilesLoadMessage = useMemo(() => adminProfilesLoadMessage(error), [error]);
 
   return (
     <>
@@ -227,7 +236,7 @@ function UserManagementBlock() {
               {isError ? (
                 <tr>
                   <td colSpan={7} className="px-5 py-8 text-center text-muted-foreground text-sm">
-                    {errMessage}
+                    {profilesLoadMessage}
                   </td>
                 </tr>
               ) : isLoading ? (
@@ -431,9 +440,9 @@ export default function Admin() {
             type="button"
             className="bg-gradient-ocean shadow-glow gap-2"
             onClick={() =>
-              toast.message("Adding people", {
+              toast.message("Invite team members", {
                 description:
-                  "Share the sign-up link with new staff, then assign their role here after they register.",
+                  "Ask colleagues to register using your organization link, then assign their role from this directory.",
               })
             }
           >
