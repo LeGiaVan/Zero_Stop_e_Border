@@ -1,0 +1,27 @@
+{
+  "source_file": "packing_list.pdf",
+  "source_path": "D:\\Documents\\GitHub\\borderflow-ai\\data\\packing_list.pdf",
+  "inferred_document_type": "packing_list",
+  "pages": 1,
+  "model": "gpt-4o-mini",
+  "extracted": {
+    "packing_list_number": "TPH-CI-2201/2026",
+    "date": "Feb 02, 2026",
+    "seller_name": "K-Tech Appliances Co., Ltd.",
+    "seller_address": "Lotte World Tower, 300 Olympic-ro, Songpa-gu, Seoul, Korea.",
+    "buyer_name": "TPH IMPORT & EXPORT JOINT STOCK COMPANY, VIET NAM",
+    "buyer_address": "76A LE LAI STREET, BEN THANH WARD, HO CHI MINH CITY, VIETNAM",
+    "invoice_number": "TPH-CI-2201/2026",
+    "port_of_loading": "Busan Port, Korea",
+    "port_of_discharge": "Cat Lai Port, Ho Chi Minh City, Vietnam",
+    "goods_description": "Air Purifier, Model KAP-500, brand new, 100% unused.",
+    "year_of_manufacture": 2025,
+    "origin": "Korea",
+    "quantity": "500 units",
+    "total_gross_weight": "3,650 kg",
+    "unit_price": "200 USD/units",
+    "total_amount": "100,000.00 USD",
+    "packaging_details": "Seaworthy export standard packing, suitable for long-distance sea transportation. Each unit is packed in 01 inner carton box and then packed on pallets. Packing: 01 unit/carton; 32X32X54 cm/1 carton.",
+    "price_term": "CIF CAT LAI PORT, HO CHI MINH CITY, VIETNAM UNDER INCOTERMS 2020."
+  }
+}
