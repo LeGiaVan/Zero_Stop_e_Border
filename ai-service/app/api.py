@@ -17,6 +17,7 @@ from typing import Any, Literal
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
+from pydantic import BaseModel, Field
 
 from app.core.config import PROJECT_ROOT, get_openai_model, load_app_env
 from app.models.schemas import DocumentSummary, RiskPayload, VerificationResponse
@@ -25,6 +26,7 @@ from app.services.comparison import (
     compute_risk,
     summarize_rows,
 )
+from app.services.declaration_pipeline import process_shipment_documents
 from app.services.extraction import (
     extract_structured_from_pdf,
     merge_canonical_documents,
@@ -48,7 +50,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get(
-        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080",
     ).split(","),
     allow_credentials=True,
     allow_methods=["*"],
@@ -175,3 +178,14 @@ async def verify(
         standardized_json=standardized_json,
         overall_flag=overall,
     )
+
+
+class ProcessShipmentDocumentsBody(BaseModel):
+    shipment_id: str = Field(..., min_length=1, description="Saved shipments.id")
+
+
+@app.post("/api/declaration/process-documents")
+def declaration_process_documents(body: ProcessShipmentDocumentsBody) -> dict[str, Any]:
+    """Load PDFs from Supabase Storage by documents.file_url; extract when needed; update mismatch_fields."""
+    sid = body.shipment_id.strip()
+    return process_shipment_documents(sid)

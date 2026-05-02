@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { requestDeclarationDocumentProcessing } from "@/lib/declarationAiPipeline";
 import {
   getSupabaseBrowserClient,
   isSupabaseConfigured,
@@ -111,8 +112,14 @@ function friendlySaveError(err: unknown): string {
   if (lower.includes("anonymous") || lower.includes("sign-in")) {
     return "We couldn’t verify your session. Please refresh the page and try again.";
   }
+  if (lower.includes("row-level security") || lower.includes("violates row-level")) {
+    return "Access blocked by security rules. On Supabase: run SQL migrations `20260204151000_shipments_insert_and_document_rls_fix.sql` (shipments INSERT + documents), and `20260204150000_storage_declarations_bucket_policies.sql` for PDF uploads.";
+  }
   if (lower.includes("policy") || lower.includes("permission") || lower.includes("rls")) {
     return "You don’t have permission to complete this action. Contact your administrator.";
+  }
+  if (lower.includes("pdf")) {
+    return "Supporting documents must be PDF files. Remove non-PDF attachments and try again.";
   }
   if (lower.includes("storage") || lower.includes("upload")) {
     return "One or more files could not be uploaded. Check your connection and try again.";
@@ -175,7 +182,7 @@ interface ItemRow {
 }
 
 export default function Declaration() {
-  const { profile } = useAuth();
+  useAuth();
   const [messages] = useState([
     {
       role: "ai" as const,
@@ -255,15 +262,42 @@ export default function Declaration() {
       return;
     }
 
+    const attachments = documents.filter((d) => d.file);
+    for (const doc of attachments) {
+      const fn = doc.file!.name.toLowerCase();
+      if (!fn.endsWith(".pdf")) {
+        toast.error("Supporting documents must be PDF files.");
+        return;
+      }
+    }
+
+    if (mode === "submit") {
+      if (attachments.length === 0) {
+        toast.error("Submit requires at least one PDF attachment.");
+        return;
+      }
+      const hasLineItem = items.some((i) => i.item_name.trim() && i.hs_code.trim());
+      if (!hasLineItem) {
+        toast.error("Submit requires at least one line item with product name and HS code.");
+        return;
+      }
+    }
+
     setSaving(true);
+    let shipmentId: string | null = null;
     try {
-      const userId = profile?.user_id;
-      if (!userId) {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) throw new Error("unavailable");
+
+      const {
+        data: { session },
+        error: sessionErr,
+      } = await supabase.auth.getSession();
+      const authUid = session?.user?.id ?? null;
+      if (sessionErr || !authUid) {
         toast.error("Your session could not be verified. Please sign in again.");
         return;
       }
-      const supabase = getSupabaseBrowserClient();
-      if (!supabase) throw new Error("unavailable");
 
       const rs = Math.min(100, Math.max(0, parseFloat(shipment.risk_score) || 0));
 
@@ -275,7 +309,7 @@ export default function Declaration() {
             : shipment.status;
 
       const shipPayload = {
-        user_id: userId,
+        user_id: authUid,
         shipment_number: num,
         product_description: shipment.product_description.trim(),
         origin_country: shipment.origin_country.trim(),
@@ -300,14 +334,25 @@ export default function Declaration() {
         .single();
 
       if (shipErr) throw shipErr;
-      const shipmentId = shipRow.id as string;
+      shipmentId = shipRow.id as string;
+
+      const documentRows: Array<{
+        shipment_id: string;
+        user_id: string;
+        doc_type: DocType;
+        file_name: string;
+        file_url: string;
+        extracted_data: Record<string, never>;
+        verification_status: string;
+        mismatch_fields: unknown[];
+      }> = [];
 
       for (const doc of documents) {
         if (!doc.file) continue;
-        const { file_name, file_url } = await uploadDeclarationDocument(userId, doc.file);
-        const { error: docErr } = await supabase.from("documents").insert({
+        const { file_name, file_url } = await uploadDeclarationDocument(authUid, doc.file);
+        documentRows.push({
           shipment_id: shipmentId,
-          user_id: userId,
+          user_id: authUid,
           doc_type: doc.doc_type,
           file_name,
           file_url,
@@ -315,11 +360,15 @@ export default function Declaration() {
           verification_status: "pending",
           mismatch_fields: [],
         });
+      }
+
+      if (documentRows.length > 0) {
+        const { error: docErr } = await supabase.from("documents").insert(documentRows);
         if (docErr) throw docErr;
       }
 
       const filledItems = items.filter((i) => i.item_name.trim() && i.hs_code.trim());
-      for (const row of filledItems) {
+      const itemRows = filledItems.map((row) => {
         let legal: unknown[] = [];
         const raw = row.legal_references.trim();
         if (raw) {
@@ -330,7 +379,7 @@ export default function Declaration() {
             legal = [];
           }
         }
-        const { error: itemErr } = await supabase.from("declaration_items").insert({
+        return {
           shipment_id: shipmentId,
           item_name: row.item_name.trim(),
           hs_code: row.hs_code.trim(),
@@ -338,11 +387,31 @@ export default function Declaration() {
           unit_value: parseFloat(row.unit_value) || 0,
           country_of_origin: row.country_of_origin.trim(),
           legal_references: legal,
-        });
+        };
+      });
+
+      if (itemRows.length > 0) {
+        const { error: itemErr } = await supabase.from("declaration_items").insert(itemRows);
         if (itemErr) throw itemErr;
       }
 
+      if (mode === "submit") {
+        if (documentRows.length === 0 || itemRows.length === 0) {
+          throw new Error("Submit did not persist documents and line items.");
+        }
+      }
+
       toast.success(mode === "draft" ? "Draft saved." : "Declaration submitted.");
+
+      if (documentRows.length > 0) {
+        void requestDeclarationDocumentProcessing(shipmentId).catch((err: unknown) => {
+          const detail =
+            err instanceof Error ? err.message : "The AI service returned an error.";
+          toast.warning("Saved — AI extraction did not run.", {
+            description: detail.length > 420 ? `${detail.slice(0, 417)}…` : detail,
+          });
+        });
+      }
 
       setShipment(emptyShipment());
       setDocuments([{ id: newRowId(), doc_type: "invoice", file: null }]);
@@ -358,7 +427,19 @@ export default function Declaration() {
         },
       ]);
     } catch (e: unknown) {
-      toast.error(friendlySaveError(e));
+      let suffix = "";
+      if (shipmentId) {
+        const rollback = getSupabaseBrowserClient();
+        const { error: rollbackErr } = await rollback
+          .from("shipments")
+          .delete()
+          .eq("id", shipmentId);
+        if (rollbackErr) {
+          suffix =
+            " Your shipment row could not be rolled back — apply Supabase migration `20260204140000_documents_declaration_items_insert_rls.sql`.";
+        }
+      }
+      toast.error(friendlySaveError(e) + suffix);
     } finally {
       setSaving(false);
     }
@@ -613,7 +694,8 @@ export default function Declaration() {
                       Supporting documents
                     </CardTitle>
                     <CardDescription>
-                      Attach invoices, lists, certificates, or transport documents for this shipment.
+                      Attach PDF invoices, packing lists, certificates, or transport documents — files are stored in
+                      Supabase Storage and processed by the AI service after save.
                     </CardDescription>
                   </div>
                 </div>
@@ -661,7 +743,7 @@ export default function Declaration() {
                     </Label>
                     <Input
                       type="file"
-                      accept=".pdf,.jpg,.jpeg,.png,.webp"
+                      accept=".pdf,application/pdf"
                       className="cursor-pointer bg-background"
                       onChange={(e) =>
                         updateDocRow(doc.id, {
