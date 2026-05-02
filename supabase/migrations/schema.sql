@@ -1,154 +1,231 @@
-/*
-  # Zero-Stop E-Border Database Schema
+-- ==============================================================================
+-- KHỞI TẠO CƠ SỞ DỮ LIỆU ZERO-STOP E-BORDER (POSTGRESQL)
+-- ==============================================================================
 
-  1. New Tables
-    - `shipments` - Core shipment records with product info, status, risk score
-    - `documents` - Uploaded documents (invoices, packing lists) linked to shipments
-    - `declaration_items` - Line items within a shipment declaration
-    - `tracking_events` - Timeline events for shipment tracking
-    - `border_scans` - Border gate scan records
-    - `user_profiles` - Extended user profiles for admin management
-    - `system_logs` - Audit and system event logs
-    - `ai_assistant_messages` - Smart declaration chat; metadata for HS/legal hints
-    - `ai_model_settings` - Admin AI model and prompt configuration per config_key
+-- Bật extension tạo UUID nếu chưa có
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
-  2. Security
-    - RLS enabled on all tables
-    - Policies restrict access to authenticated users only
-    - Users can only modify their own data where applicable
+-- ==============================================================================
+-- PHẦN 1: TẠO CÁC BẢNG LÕI (CORE TABLES) VÀ RÀNG BUỘC (CONSTRAINTS)
+-- ==============================================================================
 
-  3. Notes
-    - Uses UUID primary keys throughout
-    - Timestamps with timezone for all records
-    - Risk scores stored as numeric (0-100)
-    - Status fields use text enums for clarity
-*/
-
--- Shipments table
+-- 1. Bảng shipments (Quản lý Lô hàng/Chuyến hàng)
 CREATE TABLE IF NOT EXISTS shipments (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE,
-  shipment_number text NOT NULL DEFAULT '',
-  product_description text DEFAULT '',
-  origin_country text DEFAULT '',
-  destination_country text DEFAULT '',
-  status text DEFAULT 'pending' CHECK (status IN ('pending', 'in_review', 'cleared', 'held', 'in_transit', 'delivered')),
-  risk_score numeric DEFAULT 0,
-  risk_level text DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
-  risk_explanation text DEFAULT '',
-  clearance_time_hours numeric DEFAULT 0,
-  hs_code text DEFAULT '',
-  container_id text DEFAULT '',
-  license_plate text DEFAULT '',
-  seal_status text DEFAULT 'intact' CHECK (seal_status IN ('intact', 'broken', 'verified')),
-  current_lat numeric DEFAULT 0,
-  current_lng numeric DEFAULT 0,
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL, -- Sẽ được liên kết với auth.users nếu dùng Supabase
+  shipment_number TEXT NOT NULL UNIQUE,
+  product_description TEXT DEFAULT '',
+  origin_country TEXT DEFAULT '',
+  destination_country TEXT DEFAULT '',
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in_review', 'cleared', 'held', 'in_transit', 'delivered', 'cancelled')),
+  risk_score NUMERIC(5,2) DEFAULT 0 CHECK (risk_score >= 0 AND risk_score <= 100),
+  risk_level TEXT DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
+  risk_explanation TEXT DEFAULT '',
+  clearance_time_hours NUMERIC(10,2) DEFAULT 0,
+  hs_code TEXT DEFAULT '',
+  container_id TEXT DEFAULT '',
+  license_plate TEXT DEFAULT '',
+  seal_status TEXT DEFAULT 'intact' CHECK (seal_status IN ('intact', 'broken', 'verified')),
+  current_lat NUMERIC(9,6) DEFAULT 0,
+  current_lng NUMERIC(9,6) DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Documents table
+-- 2. Bảng documents (Quản lý Chứng từ đính kèm lô hàng)
 CREATE TABLE IF NOT EXISTS documents (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  shipment_id uuid REFERENCES shipments(id) ON DELETE CASCADE,
-  user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE,
-  doc_type text DEFAULT 'invoice' CHECK (doc_type IN ('invoice', 'packing_list', 'certificate', 'other')),
-  file_name text DEFAULT '',
-  file_url text DEFAULT '',
-  extracted_data jsonb DEFAULT '{}',
-  verification_status text DEFAULT 'pending' CHECK (verification_status IN ('pending', 'valid', 'warning', 'fraud_risk')),
-  mismatch_fields jsonb DEFAULT '[]',
-  created_at timestamptz DEFAULT now()
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  shipment_id UUID REFERENCES shipments(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
+  doc_type TEXT DEFAULT 'invoice' CHECK (doc_type IN ('invoice', 'packing_list', 'certificate', 'bill_of_lading', 'other')),
+  file_name TEXT NOT NULL,
+  file_url TEXT NOT NULL,
+  extracted_data JSONB DEFAULT '{}', -- Dữ liệu thô bóc tách từ PDF
+  verification_status TEXT DEFAULT 'pending' CHECK (verification_status IN ('pending', 'valid', 'warning', 'fraud_risk')),
+  mismatch_fields JSONB DEFAULT '[]', -- Danh sách các trường không khớp
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Declaration items table
+-- 3. Bảng declaration_items (Chi tiết tờ khai hải quan)
 CREATE TABLE IF NOT EXISTS declaration_items (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  shipment_id uuid REFERENCES shipments(id) ON DELETE CASCADE,
-  item_name text DEFAULT '',
-  hs_code text DEFAULT '',
-  quantity numeric DEFAULT 0,
-  unit_value numeric DEFAULT 0,
-  total_value numeric DEFAULT 0,
-  country_of_origin text DEFAULT '',
-  legal_references jsonb DEFAULT '[]',
-  created_at timestamptz DEFAULT now()
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  shipment_id UUID REFERENCES shipments(id) ON DELETE CASCADE,
+  item_name TEXT NOT NULL,
+  hs_code TEXT NOT NULL,
+  quantity NUMERIC(15,3) DEFAULT 0 CHECK (quantity >= 0),
+  unit_value NUMERIC(15,2) DEFAULT 0 CHECK (unit_value >= 0),
+  total_value NUMERIC(15,2) GENERATED ALWAYS AS (quantity * unit_value) STORED,
+  country_of_origin TEXT DEFAULT '',
+  legal_references JSONB DEFAULT '[]', -- Căn cứ pháp lý từ AI HS-Advisor
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Tracking events table
+-- 4. Bảng tracking_events (Ghi nhận hành trình GPS/Sự kiện)
 CREATE TABLE IF NOT EXISTS tracking_events (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  shipment_id uuid REFERENCES shipments(id) ON DELETE CASCADE,
-  event_type text DEFAULT 'info' CHECK (event_type IN ('info', 'checkpoint', 'alert', 'arrival', 'departure', 'customs')),
-  event_title text DEFAULT '',
-  event_description text DEFAULT '',
-  location text DEFAULT '',
-  lat numeric DEFAULT 0,
-  lng numeric DEFAULT 0,
-  event_time timestamptz DEFAULT now()
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  shipment_id UUID REFERENCES shipments(id) ON DELETE CASCADE,
+  event_type TEXT DEFAULT 'info' CHECK (event_type IN ('info', 'checkpoint', 'alert', 'arrival', 'departure', 'customs', 'anomaly_detected')),
+  event_title TEXT NOT NULL,
+  event_description TEXT DEFAULT '',
+  location TEXT DEFAULT '',
+  lat NUMERIC(9,6) NOT NULL,
+  lng NUMERIC(9,6) NOT NULL,
+  event_time TIMESTAMPTZ DEFAULT now(),
+  created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Border scans table
+-- 5. Bảng border_scans (Kết quả quét tại cửa khẩu - Vision Edge Gate)
 CREATE TABLE IF NOT EXISTS border_scans (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  shipment_id uuid REFERENCES shipments(id) ON DELETE CASCADE,
-  scan_type text DEFAULT 'vehicle' CHECK (scan_type IN ('vehicle', 'container', 'cargo')),
-  license_plate text DEFAULT '',
-  container_id text DEFAULT '',
-  scan_result text DEFAULT 'pass' CHECK (scan_result IN ('pass', 'hold', 'fail')),
-  scan_details jsonb DEFAULT '{}',
-  scanned_at timestamptz DEFAULT now()
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  shipment_id UUID REFERENCES shipments(id) ON DELETE CASCADE,
+  scan_type TEXT DEFAULT 'vehicle' CHECK (scan_type IN ('vehicle', 'container', 'cargo', 'seal')),
+  license_plate TEXT DEFAULT '',
+  container_id TEXT DEFAULT '',
+  scan_result TEXT DEFAULT 'pass' CHECK (scan_result IN ('pass', 'hold', 'fail')),
+  scan_details JSONB DEFAULT '{}', -- Dữ liệu từ YOLOv11 OCR
+  scanned_at TIMESTAMPTZ DEFAULT now(),
+  created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- User profiles table
+-- 6. Bảng user_profiles (Thông tin người dùng mở rộng)
 CREATE TABLE IF NOT EXISTS user_profiles (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
-  full_name text DEFAULT '',
-  role text DEFAULT 'operator' CHECK (role IN ('admin', 'operator', 'inspector', 'viewer')),
-  department text DEFAULT '',
-  is_active boolean DEFAULT true,
-  last_login timestamptz,
-  created_at timestamptz DEFAULT now()
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID UNIQUE NOT NULL, -- Liên kết 1-1 với auth.users
+  full_name TEXT NOT NULL,
+  role TEXT DEFAULT 'operator' CHECK (role IN ('admin', 'operator', 'inspector', 'viewer')),
+  department TEXT DEFAULT '',
+  is_active BOOLEAN DEFAULT true,
+  last_login TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- System logs table
+-- 7. Bảng system_logs (Nhật ký hệ thống để kiểm toán)
 CREATE TABLE IF NOT EXISTS system_logs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
-  action text DEFAULT '',
-  entity_type text DEFAULT '',
-  entity_id uuid,
-  details jsonb DEFAULT '{}',
-  severity text DEFAULT 'info' CHECK (severity IN ('info', 'warning', 'error', 'critical')),
-  created_at timestamptz DEFAULT now()
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID, -- Cho phép NULL nếu là system action
+  action TEXT NOT NULL,
+  entity_type TEXT DEFAULT '',
+  entity_id UUID,
+  details JSONB DEFAULT '{}',
+  severity TEXT DEFAULT 'info' CHECK (severity IN ('info', 'warning', 'error', 'critical')),
+  created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- AI assistant messages (declaration chat, suggestions; optional shipment link)
+-- 8. Bảng ai_assistant_messages (Lưu trữ lịch sử chat với AI)
 CREATE TABLE IF NOT EXISTS ai_assistant_messages (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  shipment_id uuid REFERENCES shipments(id) ON DELETE CASCADE,
-  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  role text NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
-  content text DEFAULT '',
-  metadata jsonb DEFAULT '{}',
-  created_at timestamptz DEFAULT now()
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  shipment_id UUID REFERENCES shipments(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+  content TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}', -- Lưu trữ token usage, context
+  created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- AI model configuration (admin panel)
+-- 9. Bảng ai_model_settings (Cấu hình LLM - Chỉ Admin)
 CREATE TABLE IF NOT EXISTS ai_model_settings (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  config_key text NOT NULL UNIQUE,
-  model_name text DEFAULT '',
-  temperature numeric DEFAULT 0.7,
-  max_output_tokens integer DEFAULT 2048,
-  system_prompt text DEFAULT '',
-  extra_params jsonb DEFAULT '{}',
-  updated_at timestamptz DEFAULT now(),
-  updated_by uuid REFERENCES auth.users(id) ON DELETE SET NULL
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  config_key TEXT NOT NULL UNIQUE,
+  model_name TEXT NOT NULL,
+  temperature NUMERIC(3,2) DEFAULT 0.7 CHECK (temperature >= 0 AND temperature <= 2),
+  max_output_tokens INTEGER DEFAULT 2048,
+  system_prompt TEXT DEFAULT '',
+  extra_params JSONB DEFAULT '{}',
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  updated_by UUID
 );
 
--- Enable RLS on all tables
+-- ==============================================================================
+-- PHẦN 2: TẠO CHỈ MỤC (INDEXES) ĐỂ TỐI ƯU HIỆU SUẤT TRUY VẤN
+-- ==============================================================================
+
+CREATE INDEX idx_shipments_user_id ON shipments(user_id);
+CREATE INDEX idx_shipments_status ON shipments(status);
+CREATE INDEX idx_shipments_number ON shipments(shipment_number);
+
+CREATE INDEX idx_documents_shipment_id ON documents(shipment_id);
+CREATE INDEX idx_documents_type ON documents(doc_type);
+
+CREATE INDEX idx_declaration_items_shipment_id ON declaration_items(shipment_id);
+
+CREATE INDEX idx_tracking_events_shipment_id ON tracking_events(shipment_id);
+CREATE INDEX idx_tracking_events_time ON tracking_events(event_time DESC);
+
+CREATE INDEX idx_border_scans_shipment_id ON border_scans(shipment_id);
+CREATE INDEX idx_border_scans_plate ON border_scans(license_plate);
+
+CREATE INDEX idx_system_logs_created_at ON system_logs(created_at DESC);
+
+CREATE INDEX idx_ai_messages_shipment ON ai_assistant_messages(shipment_id);
+CREATE INDEX idx_ai_messages_user ON ai_assistant_messages(user_id);
+
+-- ==============================================================================
+-- PHẦN 3: TẠO CÁC HÀM (FUNCTIONS) VÀ TRIGGER TỰ ĐỘNG
+-- ==============================================================================
+
+-- Hàm tự động cập nhật cột updated_at
+CREATE OR REPLACE FUNCTION update_modified_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+-- Áp dụng trigger cho các bảng cần thiết
+CREATE TRIGGER set_timestamp_shipments
+  BEFORE UPDATE ON shipments
+  FOR EACH ROW EXECUTE PROCEDURE update_modified_column();
+
+CREATE TRIGGER set_timestamp_documents
+  BEFORE UPDATE ON documents
+  FOR EACH ROW EXECUTE PROCEDURE update_modified_column();
+
+CREATE TRIGGER set_timestamp_declaration_items
+  BEFORE UPDATE ON declaration_items
+  FOR EACH ROW EXECUTE PROCEDURE update_modified_column();
+
+CREATE TRIGGER set_timestamp_user_profiles
+  BEFORE UPDATE ON user_profiles
+  FOR EACH ROW EXECUTE PROCEDURE update_modified_column();
+
+CREATE TRIGGER set_timestamp_ai_settings
+  BEFORE UPDATE ON ai_model_settings
+  FOR EACH ROW EXECUTE PROCEDURE update_modified_column();
+
+
+-- Hàm kiểm toán: Tự động ghi log khi có thay đổi trạng thái Shipment
+CREATE OR REPLACE FUNCTION log_shipment_status_change()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO system_logs (action, entity_type, entity_id, details, severity)
+    VALUES (
+      'SHIPMENT_STATUS_CHANGED',
+      'shipment',
+      NEW.id,
+      jsonb_build_object('old_status', OLD.status, 'new_status', NEW.status),
+      'info'
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE TRIGGER trg_log_shipment_status
+  AFTER UPDATE OF status ON shipments
+  FOR EACH ROW EXECUTE PROCEDURE log_shipment_status_change();
+
+
+-- ==============================================================================
+-- PHẦN 4: BẢO MẬT ROW LEVEL SECURITY (RLS) - GIẢ ĐỊNH DÙNG SUPABASE AUTH
+-- ==============================================================================
+-- Lưu ý: Nếu bạn chạy trên PostgreSQL chuẩn không có Supabase, bạn cần thay thế
+-- auth.uid() bằng hàm xác thực session của hệ thống bạn.
+
 ALTER TABLE shipments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE declaration_items ENABLE ROW LEVEL SECURITY;
@@ -159,73 +236,160 @@ ALTER TABLE system_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_assistant_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_model_settings ENABLE ROW LEVEL SECURITY;
 
--- RLS Policies for shipments
-CREATE POLICY "Users can view own shipments" ON shipments FOR SELECT TO authenticated USING (auth.uid() = user_id);
-CREATE POLICY "Users can create own shipments" ON shipments FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Users can update own shipments" ON shipments FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Users can delete own shipments" ON shipments FOR DELETE TO authenticated USING (auth.uid() = user_id);
+-- 4.1 Policies cho user_profiles
+CREATE POLICY "Users can read their own profile" 
+  ON user_profiles FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Admins can read all profiles" 
+  ON user_profiles FOR SELECT USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE user_id = auth.uid() AND role = 'admin')
+  );
 
--- RLS Policies for documents
-CREATE POLICY "Users can view own documents" ON documents FOR SELECT TO authenticated USING (auth.uid() = user_id);
-CREATE POLICY "Users can create own documents" ON documents FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Users can update own documents" ON documents FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Users can delete own documents" ON documents FOR DELETE TO authenticated USING (auth.uid() = user_id);
+-- 4.2 Policies cho shipments
+-- Người dùng tạo ra lô hàng thì được xem/sửa lô hàng đó.
+CREATE POLICY "Users can view own shipments" 
+  ON shipments FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert own shipments" 
+  ON shipments FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update own shipments" 
+  ON shipments FOR UPDATE USING (auth.uid() = user_id);
+-- Cán bộ hải quan (inspector) hoặc admin được xem tất cả
+CREATE POLICY "Inspectors/Admins can view all shipments" 
+  ON shipments FOR SELECT USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE user_id = auth.uid() AND role IN ('admin', 'inspector'))
+  );
 
--- RLS Policies for declaration_items
-CREATE POLICY "Users can view own declaration items" ON declaration_items FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM shipments WHERE shipments.id = declaration_items.shipment_id AND shipments.user_id = auth.uid()));
-CREATE POLICY "Users can create own declaration items" ON declaration_items FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM shipments WHERE shipments.id = declaration_items.shipment_id AND shipments.user_id = auth.uid()));
-CREATE POLICY "Users can update own declaration items" ON declaration_items FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM shipments WHERE shipments.id = declaration_items.shipment_id AND shipments.user_id = auth.uid())) WITH CHECK (EXISTS (SELECT 1 FROM shipments WHERE shipments.id = declaration_items.shipment_id AND shipments.user_id = auth.uid()));
-CREATE POLICY "Users can delete own declaration items" ON declaration_items FOR DELETE TO authenticated USING (EXISTS (SELECT 1 FROM shipments WHERE shipments.id = declaration_items.shipment_id AND shipments.user_id = auth.uid()));
+-- 4.3 Policies cho documents
+CREATE POLICY "Users can view documents of own shipments" 
+  ON documents FOR SELECT USING (
+    user_id = auth.uid() OR 
+    EXISTS (SELECT 1 FROM shipments WHERE id = documents.shipment_id AND user_id = auth.uid())
+  );
+CREATE POLICY "Users can insert documents" 
+  ON documents FOR INSERT WITH CHECK (user_id = auth.uid());
 
--- RLS Policies for tracking_events
-CREATE POLICY "Users can view own tracking events" ON tracking_events FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM shipments WHERE shipments.id = tracking_events.shipment_id AND shipments.user_id = auth.uid()));
-CREATE POLICY "Users can create own tracking events" ON tracking_events FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM shipments WHERE shipments.id = tracking_events.shipment_id AND shipments.user_id = auth.uid()));
+-- 4.4 Các bảng liên quan Shipment (declaration_items, tracking, border_scans)
+CREATE POLICY "Users can view items of own shipments" 
+  ON declaration_items FOR SELECT USING (
+    EXISTS (SELECT 1 FROM shipments WHERE id = declaration_items.shipment_id AND user_id = auth.uid())
+  );
+CREATE POLICY "Users can view tracking of own shipments" 
+  ON tracking_events FOR SELECT USING (
+    EXISTS (SELECT 1 FROM shipments WHERE id = tracking_events.shipment_id AND user_id = auth.uid())
+  );
+CREATE POLICY "Users can view scans of own shipments" 
+  ON border_scans FOR SELECT USING (
+    EXISTS (SELECT 1 FROM shipments WHERE id = border_scans.shipment_id AND user_id = auth.uid())
+  );
 
--- RLS Policies for border_scans
-CREATE POLICY "Users can view own border scans" ON border_scans FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM shipments WHERE shipments.id = border_scans.shipment_id AND shipments.user_id = auth.uid()));
-CREATE POLICY "Users can create own border scans" ON border_scans FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM shipments WHERE shipments.id = border_scans.shipment_id AND shipments.user_id = auth.uid()));
+-- 4.5 Cấu hình hệ thống & Logs
+CREATE POLICY "Admins control AI settings" 
+  ON ai_model_settings FOR ALL USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE user_id = auth.uid() AND role = 'admin')
+  );
+CREATE POLICY "Admins can view logs" 
+  ON system_logs FOR SELECT USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE user_id = auth.uid() AND role = 'admin')
+  );
 
--- RLS Policies for user_profiles
-CREATE POLICY "Users can view own profile" ON user_profiles FOR SELECT TO authenticated USING (auth.uid() = user_id);
-CREATE POLICY "Admins can view all profiles" ON user_profiles FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM user_profiles up WHERE up.user_id = auth.uid() AND up.role = 'admin'));
-CREATE POLICY "Users can update own profile" ON user_profiles FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Admins can update any profile" ON user_profiles FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM user_profiles up WHERE up.user_id = auth.uid() AND up.role = 'admin')) WITH CHECK (EXISTS (SELECT 1 FROM user_profiles up WHERE up.user_id = auth.uid() AND up.role = 'admin'));
-CREATE POLICY "Users can create own profile" ON user_profiles FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Admins can insert profiles" ON user_profiles FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM user_profiles up WHERE up.user_id = auth.uid() AND up.role = 'admin'));
+-- ==============================================================================
+-- PHẦN 5: DỮ LIỆU MẪU BAN ĐẦU (SEED DATA)
+-- ==============================================================================
 
--- RLS Policies for system_logs
-CREATE POLICY "Admins can view system logs" ON system_logs FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM user_profiles WHERE user_profiles.user_id = auth.uid() AND user_profiles.role = 'admin'));
-CREATE POLICY "Admins can insert system logs" ON system_logs FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM user_profiles WHERE user_profiles.user_id = auth.uid() AND user_profiles.role = 'admin'));
+-- Thêm cấu hình mô hình AI mặc định
+INSERT INTO ai_model_settings (config_key, model_name, system_prompt)
+VALUES 
+  ('document_extractor', 'gpt-4o-mini', 'You are an expert data extractor for international trade documents...'),
+  ('hs_advisor', 'gpt-4o', 'You are an expert customs advisor...'),
+  ('trajectory_guardian', 'custom-lstm', 'Detect anomalies in GPS time-series data...')
+ON CONFLICT (config_key) DO NOTHING;
 
--- RLS Policies for ai_assistant_messages
-CREATE POLICY "Users can view AI messages for own context" ON ai_assistant_messages FOR SELECT TO authenticated USING (
-  ai_assistant_messages.user_id = auth.uid()
-  OR EXISTS (SELECT 1 FROM shipments s WHERE s.id = ai_assistant_messages.shipment_id AND s.user_id = auth.uid())
-);
-CREATE POLICY "Users can insert AI messages" ON ai_assistant_messages FOR INSERT TO authenticated WITH CHECK (
-  user_id = auth.uid()
-  AND (
-    shipment_id IS NULL
-    OR EXISTS (SELECT 1 FROM shipments s WHERE s.id = shipment_id AND s.user_id = auth.uid())
+CREATE POLICY "Users can insert declaration items for own shipments"
+  ON declaration_items FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM shipments s
+      WHERE s.id = declaration_items.shipment_id AND s.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can update declaration items for own shipments"
+  ON declaration_items FOR UPDATE
+  USING (
+    EXISTS (
+      SELECT 1 FROM shipments s
+      WHERE s.id = declaration_items.shipment_id AND s.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can delete declaration items for own shipments"
+  ON declaration_items FOR DELETE
+  USING (
+    EXISTS (
+      SELECT 1 FROM shipments s
+      WHERE s.id = declaration_items.shipment_id AND s.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can insert own profile"
+  ON user_profiles FOR INSERT
+  WITH CHECK (
+    auth.uid() = user_id
+    AND role = 'operator'
+  );
+
+  -- Auto-create operator profile when a user registers (runs as SECURITY DEFINER; bypasses RLS).
+-- Apply this migration in the Supabase SQL Editor if CLI rejects auth schema triggers.
+
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO public.user_profiles (user_id, full_name, department, role)
+  VALUES (
+    NEW.id,
+    COALESCE(
+      NULLIF(TRIM(COALESCE(NEW.raw_user_meta_data->>'full_name', '')), ''),
+      SPLIT_PART(COALESCE(NEW.email, 'user'), '@', 1)
+    ),
+    COALESCE(NULLIF(TRIM(COALESCE(NEW.raw_user_meta_data->>'department', '')), ''), ''),
+    'operator'
   )
-);
-CREATE POLICY "Users can update own AI messages" ON ai_assistant_messages FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
-CREATE POLICY "Users can delete own AI messages" ON ai_assistant_messages FOR DELETE TO authenticated USING (user_id = auth.uid());
+  ON CONFLICT (user_id) DO NOTHING;
+  RETURN NEW;
+END;
+$$;
 
--- RLS Policies for ai_model_settings
-CREATE POLICY "Admins can view AI model settings" ON ai_model_settings FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM user_profiles up WHERE up.user_id = auth.uid() AND up.role = 'admin'));
-CREATE POLICY "Admins can insert AI model settings" ON ai_model_settings FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM user_profiles up WHERE up.user_id = auth.uid() AND up.role = 'admin'));
-CREATE POLICY "Admins can update AI model settings" ON ai_model_settings FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM user_profiles up WHERE up.user_id = auth.uid() AND up.role = 'admin')) WITH CHECK (EXISTS (SELECT 1 FROM user_profiles up WHERE up.user_id = auth.uid() AND up.role = 'admin'));
-CREATE POLICY "Admins can delete AI model settings" ON ai_model_settings FOR DELETE TO authenticated USING (EXISTS (SELECT 1 FROM user_profiles up WHERE up.user_id = auth.uid() AND up.role = 'admin'));
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_new_user();
 
--- Create indexes for performance
-CREATE INDEX IF NOT EXISTS idx_shipments_user_id ON shipments(user_id);
-CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status);
-CREATE INDEX IF NOT EXISTS idx_documents_shipment_id ON documents(shipment_id);
-CREATE INDEX IF NOT EXISTS idx_declaration_items_shipment_id ON declaration_items(shipment_id);
-CREATE INDEX IF NOT EXISTS idx_tracking_events_shipment_id ON tracking_events(shipment_id);
-CREATE INDEX IF NOT EXISTS idx_border_scans_shipment_id ON border_scans(shipment_id);
-CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs(created_at);
-CREATE INDEX IF NOT EXISTS idx_ai_assistant_messages_shipment_id ON ai_assistant_messages(shipment_id);
-CREATE INDEX IF NOT EXISTS idx_ai_assistant_messages_user_id ON ai_assistant_messages(user_id);
-CREATE INDEX IF NOT EXISTS idx_ai_model_settings_config_key ON ai_model_settings(config_key);
+-- Admins may update any row in user_profiles (name, department, role, active, etc.)
+CREATE POLICY "Admins can update all profiles"
+  ON user_profiles FOR UPDATE
+  USING (
+    EXISTS (
+      SELECT 1 FROM user_profiles up
+      WHERE up.user_id = auth.uid() AND up.role = 'admin'
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM user_profiles up
+      WHERE up.user_id = auth.uid() AND up.role = 'admin'
+    )
+  );
+
+-- Admins may remove a profile row (auth user may still exist; client should warn users)
+CREATE POLICY "Admins can delete profiles"
+  ON user_profiles FOR DELETE
+  USING (
+    EXISTS (
+      SELECT 1 FROM user_profiles up
+      WHERE up.user_id = auth.uid() AND up.role = 'admin'
+    )
+  );

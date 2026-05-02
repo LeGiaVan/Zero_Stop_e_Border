@@ -10,19 +10,38 @@ import {
   Container,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
+import type { UserRole } from "@/types/profile";
 
-const items = [
-  { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "Smart Declaration", url: "/declaration", icon: FileText },
-  { title: "Document Verification", url: "/verification", icon: ShieldCheck },
-  { title: "Shipment Tracking", url: "/tracking", icon: MapPin },
-  { title: "Risk Analysis", url: "/risk", icon: AlertTriangle },
-  { title: "Border Gate", url: "/gate", icon: ScanLine },
-  { title: "Admin Panel", url: "/admin", icon: Settings },
+const NAV_ITEMS: {
+  title: string;
+  url: string;
+  icon: typeof LayoutDashboard;
+  roles: UserRole[];
+}[] = [
+  { title: "Dashboard", url: "/", icon: LayoutDashboard, roles: ["inspector", "viewer"] },
+  { title: "Smart Declaration", url: "/declaration", icon: FileText, roles: ["operator"] },
+  {
+    title: "Document Verification",
+    url: "/verification",
+    icon: ShieldCheck,
+    roles: ["inspector", "viewer"],
+  },
+  { title: "Shipment Tracking", url: "/tracking", icon: MapPin, roles: ["inspector", "viewer"] },
+  { title: "Risk Analysis", url: "/risk", icon: AlertTriangle, roles: ["inspector", "viewer"] },
+  { title: "Border Gate", url: "/gate", icon: ScanLine, roles: ["inspector", "viewer"] },
+  { title: "Admin Panel", url: "/admin", icon: Settings, roles: ["admin"] },
 ];
+
+function navForRole(role: UserRole) {
+  if (role === "admin") return NAV_ITEMS;
+  return NAV_ITEMS.filter((item) => item.roles.includes(role));
+}
 
 export function AppSidebar() {
   const { pathname } = useLocation();
+  const { profile } = useAuth();
+  const items = profile ? navForRole(profile.role) : [];
 
   return (
     <aside className="hidden md:flex w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
