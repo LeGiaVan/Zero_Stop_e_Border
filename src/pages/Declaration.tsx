@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -183,20 +183,108 @@ interface ItemRow {
 
 export default function Declaration() {
   useAuth();
-  const [messages] = useState([
+  type ChatMessage = {
+    id: string;
+    role: "user" | "ai";
+    text: string;
+    buttons?: { label: string; action: string }[];
+    buttonsHidden?: boolean;
+  };
+
+  const N8N_WEBHOOK_URL = "https://vanle044.app.n8n.cloud/webhook/6568dd1c-79bc-4110-a71f-733a9825d29a";
+  const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      role: "ai" as const,
-      text: "Describe your goods and I can suggest tariff codes and compliance notes for each line.",
-    },
-    {
-      role: "user" as const,
-      text: "We’re importing wireless Bluetooth headphones — five hundred units.",
-    },
-    {
-      role: "ai" as const,
-      text: "Suggested tariff heading: 8518.30.20. Add a line item with quantity and unit value to capture it on the declaration.",
+      id: "welcome",
+      role: "ai",
+      text: "Xin chào! Tôi là trợ lý AI. Vui lòng nhập tên và mô tả mặt hàng nông sản bạn cần tra cứu mã HS.",
     },
   ]);
+  const [inputText, setInputText] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const [sessionId, setSessionId] = useState<string>("");
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let storedSession = localStorage.getItem("chatbot_session_id");
+    if (!storedSession) {
+      storedSession = "session_" + Math.random().toString(36).substring(2, 15);
+      localStorage.setItem("chatbot_session_id", storedSession);
+    }
+    setSessionId(storedSession);
+  }, []);
+
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
+    }
+  }, [messages, isTyping]);
+
+  const sendDataToServer = useCallback(async (type: "text" | "button", payloadData: string, displayText: string) => {
+    if (isTyping) return;
+
+    setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", text: displayText }]);
+    setIsTyping(true);
+
+    try {
+      const response = await fetch(N8N_WEBHOOK_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          type: type,
+          data: payloadData,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Lỗi phản hồi từ server");
+      }
+
+      const responseData = await response.json();
+
+      if (responseData.reply) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now().toString() + "_bot",
+            role: "ai",
+            text: responseData.reply,
+            buttons: responseData.buttons || []
+          }
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { id: Date.now().toString() + "_err", role: "ai", text: 'Đã nhận phản hồi nhưng thiếu key "reply". Vui lòng kiểm tra lại n8n.' },
+        ]);
+      }
+    } catch (error) {
+      console.error("Chat error:", error);
+      setMessages((prev) => [
+        ...prev,
+        { id: Date.now().toString() + "_err2", role: "ai", text: "Xin lỗi, không thể kết nối tới server. Vui lòng kiểm tra lại Webhook URL." },
+      ]);
+    } finally {
+      setIsTyping(false);
+    }
+  }, [isTyping, sessionId]);
+
+  const handleSendText = useCallback(() => {
+    const text = inputText.trim();
+    if (!text) return;
+    setInputText("");
+    void sendDataToServer("text", text, text);
+  }, [inputText, sendDataToServer]);
+
+  const handleButtonClick = useCallback((msgId: string, action: string, label: string) => {
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, buttonsHidden: true } : m));
+    void sendDataToServer("button", action, `[Đã chọn: ${label}]`);
+  }, [sendDataToServer]);
 
   const [shipment, setShipment] = useState<ShipmentForm>(() => emptyShipment());
   const [documents, setDocuments] = useState<DocRow[]>([
@@ -1052,55 +1140,76 @@ export default function Declaration() {
               </div>
             </CardHeader>
 
-            <div className="grid grid-cols-2 gap-2 px-6 pt-4">
-              <div className="rounded-lg bg-white/10 p-3 ring-1 ring-white/10">
-                <Lightbulb className="h-4 w-4 text-amber-200 mb-1.5" />
-                <div className="text-[10px] uppercase tracking-wider text-white/60 font-medium">
-                  Suggested code
-                </div>
-                <div className="text-sm font-semibold mt-0.5 tabular-nums">8518.30.20</div>
-              </div>
-              <div className="rounded-lg bg-white/10 p-3 ring-1 ring-white/10">
-                <BookOpen className="h-4 w-4 text-sky-200 mb-1.5" />
-                <div className="text-[10px] uppercase tracking-wider text-white/60 font-medium">
-                  Compliance hints
-                </div>
-                <div className="text-sm font-semibold mt-0.5">Per line item</div>
-              </div>
-            </div>
 
-            <CardContent className="space-y-3 pt-4 pb-2 max-h-[320px] overflow-y-auto">
+            <CardContent
+              ref={chatContainerRef}
+              className="space-y-4 pt-4 pb-2 h-[380px] xl:h-[450px] overflow-y-auto"
+            >
               {messages.map((m, i) => (
-                <div key={i} className={`flex gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
-                  {m.role === "ai" && (
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/10">
-                      <Bot className="h-3.5 w-3.5" />
+                <div key={m.id || i} className={`flex flex-col w-full ${m.role === "user" ? "items-end" : "items-start"}`}>
+                  <div className={`flex gap-2 max-w-[88%] ${m.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+                    {m.role === "ai" && (
+                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/10 mt-0.5">
+                        <Bot className="h-3.5 w-3.5" />
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-2 min-w-0">
+                      <div
+                        className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${m.role === "user"
+                          ? "bg-white text-primary-deep shadow-sm"
+                          : "bg-white/12 text-white ring-1 ring-white/10"
+                          }`}
+                        dangerouslySetInnerHTML={{ __html: m.text.replace(/\n/g, '<br>') }}
+                      />
+
+                      {m.role === "ai" && m.buttons && m.buttons.length > 0 && !m.buttonsHidden && (
+                        <div className="flex flex-wrap gap-1.5 mt-1">
+                          {m.buttons.map((btn, bIdx) => (
+                            <button
+                              key={bIdx}
+                              onClick={() => handleButtonClick(m.id, btn.action, btn.label)}
+                              className="bg-white/95 text-primary px-3 py-1.5 rounded-xl text-[13px] font-semibold hover:bg-white transition-colors border border-white/20 shadow-sm text-left"
+                            >
+                              {btn.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                  <div
-                    className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed max-w-[88%] ${
-                      m.role === "user"
-                        ? "bg-white text-primary-deep shadow-sm"
-                        : "bg-white/12 text-white ring-1 ring-white/10"
-                    }`}
-                  >
-                    {m.text}
                   </div>
                 </div>
               ))}
+              {isTyping && (
+                <div className="flex gap-2 w-full">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/10">
+                    <Bot className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed bg-white/12 text-white/60 ring-1 ring-white/10 italic">
+                    Hệ thống đang xử lý...
+                  </div>
+                </div>
+              )}
             </CardContent>
 
             <div className="p-4 pt-2 border-t border-white/10">
               <div className="flex gap-2 rounded-xl bg-white/10 p-1.5 ring-1 ring-white/10">
                 <input
-                  readOnly
-                  placeholder="Assistant preview — chat coming soon."
-                  className="flex-1 bg-transparent outline-none px-2.5 text-sm placeholder:text-white/45 text-white/90 cursor-not-allowed"
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSendText();
+                    }
+                  }}
+                  placeholder="Nhập tin nhắn..."
+                  className="flex-1 bg-transparent outline-none px-2.5 text-sm placeholder:text-white/45 text-white/90"
                 />
                 <Button
                   size="sm"
-                  disabled
-                  className="h-9 shrink-0 bg-white/95 text-primary hover:bg-white"
+                  disabled={isTyping || !inputText.trim()}
+                  onClick={handleSendText}
+                  className="h-9 shrink-0 bg-white/95 text-primary hover:bg-white disabled:opacity-50"
                 >
                   <Send className="h-3.5 w-3.5" />
                 </Button>
