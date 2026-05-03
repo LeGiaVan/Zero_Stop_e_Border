@@ -15,7 +15,7 @@ PROJECT_ROOT = AI_SERVICE_ROOT.parent
 
 def load_app_env() -> None:
     load_dotenv(PROJECT_ROOT / ".env")
-    load_dotenv(AI_SERVICE_ROOT / ".env", override=True)
+    load_dotenv(AI_SERVICE_ROOT / ".env")
 
 
 def get_openai_model() -> str:
