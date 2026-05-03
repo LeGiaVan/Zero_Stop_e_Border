@@ -24,7 +24,13 @@ import AuthSignUp from "./pages/AuthSignUp";
 import AccessDenied from "./pages/AccessDenied";
 import HomeRedirect from "./pages/HomeRedirect";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 const App = () => (
   <QueryClientProvider client={queryClient}>

@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -77,22 +78,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfileRow | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const applyAuthSession = useCallback(async (sess: Session | null): Promise<UserProfileRow | null> => {
-    setSession(sess);
-    const u = sess?.user ?? null;
-    setUser(u);
-    if (u) {
+  /** Avoid global loading + profile refetch when the same user/session is re-emitted (e.g. focus-related auth noise). */
+  const stableAuthRef = useRef<{ userId: string | null; profileLoaded: boolean }>({
+    userId: null,
+    profileLoaded: false,
+  });
+  const lastProfileRef = useRef<UserProfileRow | null>(null);
+
+  const applyAuthSession = useCallback(
+    async (sess: Session | null, opts?: { forceFullReload?: boolean }): Promise<UserProfileRow | null> => {
+      const force = opts?.forceFullReload ?? false;
+      const nextUser = sess?.user ?? null;
+
+      setSession(sess);
+      setUser(nextUser);
+
+      if (!nextUser) {
+        stableAuthRef.current = { userId: null, profileLoaded: false };
+        lastProfileRef.current = null;
+        setProfile(null);
+        setLoading(false);
+        return null;
+      }
+
+      const stable = stableAuthRef.current;
+      const canShortCircuit =
+        !force &&
+        stable.userId === nextUser.id &&
+        stable.profileLoaded &&
+        lastProfileRef.current !== null;
+
+      if (canShortCircuit) {
+        setLoading(false);
+        return lastProfileRef.current;
+      }
+
       setLoading(true);
-      let row = await fetchProfile(u.id);
-      if (!row) row = await bootstrapOperatorProfile(u);
+      let row = await fetchProfile(nextUser.id);
+      if (!row) row = await bootstrapOperatorProfile(nextUser);
       setProfile(row);
+      lastProfileRef.current = row;
+      stableAuthRef.current = {
+        userId: nextUser.id,
+        profileLoaded: !!row,
+      };
       setLoading(false);
       return row;
-    }
-    setProfile(null);
-    setLoading(false);
-    return null;
-  }, []);
+    },
+    []
+  );
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
@@ -111,8 +145,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_evt, sess) => {
-      void applyAuthSession(sess);
+    } = supabase.auth.onAuthStateChange((event, sess) => {
+      // Tab focus / background refresh updates tokens without reloading profile or flashing the global loader.
+      if (event === "TOKEN_REFRESHED") {
+        if (sess) setSession(sess);
+        return;
+      }
+      // Initial session is applied via getSession() above; handling it again briefly sets loading and feels like a reload.
+      if (event === "INITIAL_SESSION") return;
+
+      void applyAuthSession(sess ?? null);
     });
 
     return () => {
@@ -125,7 +167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const supabase = getSupabaseBrowserClient();
     if (!supabase) return null;
     const { data } = await supabase.auth.getSession();
-    return applyAuthSession(data.session ?? null);
+    return applyAuthSession(data.session ?? null, { forceFullReload: true });
   }, [applyAuthSession]);
 
   const refreshProfile = useCallback(async () => {
@@ -137,6 +179,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let row = await fetchProfile(u.id);
     if (!row) row = await bootstrapOperatorProfile(u);
     setProfile(row);
+    lastProfileRef.current = row;
+    stableAuthRef.current = { userId: u.id, profileLoaded: !!row };
     return row;
   }, []);
 
