@@ -2,6 +2,17 @@
 
 Demo web application for smart customs workflows: declarations with document uploads, AI-assisted HS codes and legal references, verification against extracted documents, shipment tracking, risk scoring, and a border gate simulation. The UI is a **Vite + React + TypeScript** SPA using **shadcn/ui**, **TanStack Query**, **React Router**, and **Recharts**. Optional persistence and auth are designed around **Supabase** (see `supabase/migrations/schema.sql`).
 
+## 🚀 Live Demo & Test Accounts
+
+Experience the live system here: **[https://zero-stop-e-border-ioiz.vercel.app](https://zero-stop-e-border-ioiz.vercel.app)**
+
+To explore role-based features, please use the following test accounts:
+
+| Role | Email | Password |
+| :--- | :--- | :--- |
+| **Customs (Hải quan)** | `haiquan@gmail.com` | `123456789` |
+| **Business (Doanh nghiệp)** | `legiavan0210@gmail.com` | `123456` |
+
 ## Features
 
 ### Dashboard
@@ -38,6 +49,28 @@ Demo web application for smart customs workflows: declarations with document upl
 - User / role management (roles: admin, operator, inspector, viewer)
 - System audit logs
 - AI model configuration (model name, temperature, prompts, and related settings)
+
+## 🤖 Core AI Solutions Showcase
+
+The ecosystem integrates three distinct AI solutions to automate and optimize the customs clearance process:
+
+### 1. AI HS-Advisor
+An intelligent assistant that suggests accurate HS codes based on product descriptions and cross-references them with current legal documents.
+
+![AI HS-Advisor Demo](./path/to/your/hs-advisor.gif)
+*(Replace `./path/to/your/hs-advisor.gif` with the actual path to your GIF)*
+
+### 2. AI Auditor Agent
+An automated agent that extracts structured data from uploaded documents (Invoices, Packing Lists) and performs side-by-side verification against the declaration to highlight mismatches and fraud risks.
+
+![AI Auditor Agent Demo](./path/to/your/auditor-agent.gif)
+*(Replace `./path/to/your/auditor-agent.gif` with the actual path to your GIF)*
+
+### 3. Vision Edge Gate
+A computer vision simulation at the physical border gate. It scans license plates and container IDs, matching them against cleared declarations to make real-time **PASS** or **HOLD** decisions.
+
+![Vision Edge Gate Demo](./path/to/your/vision-edge-gate.gif)
+*(Replace `./path/to/your/vision-edge-gate.gif` with the actual path to your GIF)*
 
 ## Project structure
 
