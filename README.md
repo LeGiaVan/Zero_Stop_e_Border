@@ -16,6 +16,7 @@ Demo accounts:
 |------|------|----------|
 | Customs | `haiquan@gmail.com` | `123456789` |
 | Business | `legiavan0210@gmail.com` | `123456` |
+| Admin | `admin@gmail.com` | `123456` |
 
 ---
 
