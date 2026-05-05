@@ -85,6 +85,33 @@ export default function AuthSignIn() {
             Create an account
           </Link>
         </p>
+
+        <div className="mt-6 rounded-lg border bg-muted/50 p-4 text-sm">
+          <p className="mb-2 font-medium">Demo Accounts</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="text-muted-foreground border-b border-border/50">
+                  <th className="font-medium pb-2 pr-4">Role</th>
+                  <th className="font-medium pb-2 pr-4">Email</th>
+                  <th className="font-medium pb-2">Password</th>
+                </tr>
+              </thead>
+              <tbody className="text-xs">
+                <tr className="border-b border-border/50">
+                  <td className="py-2 pr-4 font-medium">Customs</td>
+                  <td className="pr-4">haiquan@gmail.com</td>
+                  <td>123456789</td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-4 font-medium">Business</td>
+                  <td className="pr-4">legiavan0210@gmail.com</td>
+                  <td>123456</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
