@@ -108,6 +108,11 @@ export default function AuthSignIn() {
                   <td className="pr-4">legiavan0210@gmail.com</td>
                   <td>123456</td>
                 </tr>
+                <tr>
+                  <td className="py-2 pr-4 font-medium">Admin</td>
+                  <td className="pr-4">admin@gmail.com</td>
+                  <td>123456</td>
+                </tr>
               </tbody>
             </table>
           </div>
