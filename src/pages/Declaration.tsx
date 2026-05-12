@@ -189,9 +189,12 @@ export default function Declaration() {
     text: string;
     buttons?: { label: string; action: string }[];
     buttonsHidden?: boolean;
+    interaction_id?: string;
+    feedbackStatus?: "idle" | "good" | "bad" | "submitted";
   };
 
   const N8N_WEBHOOK_URL = "https://vanle044.app.n8n.cloud/webhook/6568dd1c-79bc-4110-a71f-733a9825d29a";
+  const N8N_FEEDBACK_WEBHOOK_URL = "https://vanle044.app.n8n.cloud/webhook/25b1677a-60ad-4b34-af3c-b661fd2df002";
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
@@ -247,20 +250,38 @@ export default function Declaration() {
 
       const responseData = await response.json();
 
-      if (responseData.reply) {
+      let botText = "";
+      if (typeof responseData.reply === "string") {
+        botText = responseData.reply;
+      } else if (typeof responseData.reply === "object" && responseData.reply !== null) {
+        const replyObj = responseData.reply;
+        if (replyObj.type === "hs_code" && replyObj.properties) {
+          const hs = replyObj.properties.hs_code;
+          const exp = replyObj.properties.explanation;
+          botText = `<b>Mã HS:</b> <span class="font-bold text-amber-300">${hs?.type || ""}</span> - ${hs?.description || ""}\n\n<b>Giải thích (${exp?.type || ""}):</b>\n${exp?.description || ""}`;
+        } else {
+          botText = JSON.stringify(replyObj, null, 2);
+        }
+      } else if (responseData.answer) {
+        botText = typeof responseData.answer === "string" ? responseData.answer : JSON.stringify(responseData.answer, null, 2);
+      }
+
+      if (botText) {
         setMessages((prev) => [
           ...prev,
           {
             id: Date.now().toString() + "_bot",
             role: "ai",
-            text: responseData.reply,
-            buttons: responseData.buttons || []
+            text: botText,
+            buttons: responseData.buttons || [],
+            interaction_id: responseData.interaction_id,
+            feedbackStatus: "idle",
           }
         ]);
       } else {
         setMessages((prev) => [
           ...prev,
-          { id: Date.now().toString() + "_err", role: "ai", text: 'Đã nhận phản hồi nhưng thiếu key "reply". Vui lòng kiểm tra lại n8n.' },
+          { id: Date.now().toString() + "_err", role: "ai", text: 'Đã nhận phản hồi nhưng thiếu key "reply" hợp lệ. Vui lòng kiểm tra lại n8n.' },
         ]);
       }
     } catch (error) {
@@ -273,6 +294,34 @@ export default function Declaration() {
       setIsTyping(false);
     }
   }, [isTyping, sessionId]);
+
+  const sendFeedback = async (messageId: string, interactionId: string | undefined, rating: "good" | "bad") => {
+    setMessages((prev) =>
+      prev.map((msg) => (msg.id === messageId ? { ...msg, feedbackStatus: "submitted" } : msg))
+    );
+    try {
+      await fetch(N8N_FEEDBACK_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          interaction_id: interactionId || messageId,
+          rating: rating,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    } catch (err) {
+      console.error("Lỗi gửi feedback:", err);
+    }
+  };
+
+  const formatMarkdown = (text: string) => {
+    let html = text.replace(/\*\*(.*?)\*\*/g, '<strong class="text-amber-300 font-bold">$1</strong>');
+    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    html = html.replace(/\n/g, '<br/>');
+    return html;
+  };
+
+  // CHATBOT ABOVE
 
   const handleSendText = useCallback(() => {
     const text = inputText.trim();
@@ -1153,13 +1202,13 @@ export default function Declaration() {
                         <Bot className="h-3.5 w-3.5" />
                       </div>
                     )}
-                    <div className="flex flex-col gap-2 min-w-0">
+                    <div className="flex flex-col gap-2 min-w-0 w-full">
                       <div
                         className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${m.role === "user"
                           ? "bg-white text-primary-deep shadow-sm"
                           : "bg-white/12 text-white ring-1 ring-white/10"
                           }`}
-                        dangerouslySetInnerHTML={{ __html: m.text.replace(/\n/g, '<br>') }}
+                        dangerouslySetInnerHTML={{ __html: formatMarkdown(m.text) }}
                       />
 
                       {m.role === "ai" && m.buttons && m.buttons.length > 0 && !m.buttonsHidden && (
@@ -1173,6 +1222,34 @@ export default function Declaration() {
                               {btn.label}
                             </button>
                           ))}
+                        </div>
+                      )}
+
+                      {m.role === "ai" && m.id !== "welcome" && m.feedbackStatus === "idle" && (
+                        <div className="flex items-center gap-2 mt-1 px-1">
+                          <span className="text-[11px] text-white/50">Đánh giá kết quả này:</span>
+                          <button
+                            onClick={() => sendFeedback(m.id, m.interaction_id, "good")}
+                            className="hover:bg-white/20 transition-colors bg-white/10 rounded px-2 py-0.5 text-xs ring-1 ring-white/10"
+                            title="Hữu ích"
+                          >
+                            👍
+                          </button>
+                          <button
+                            onClick={() => sendFeedback(m.id, m.interaction_id, "bad")}
+                            className="hover:bg-white/20 transition-colors bg-white/10 rounded px-2 py-0.5 text-xs ring-1 ring-white/10"
+                            title="Không hữu ích"
+                          >
+                            👎
+                          </button>
+                        </div>
+                      )}
+
+                      {m.role === "ai" && m.feedbackStatus === "submitted" && (
+                        <div className="mt-1 px-1">
+                          <span className="text-[11px] italic text-emerald-400">
+                            ✓ Cảm ơn bạn đã phản hồi!
+                          </span>
                         </div>
                       )}
                     </div>
