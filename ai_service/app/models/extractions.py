@@ -47,6 +47,32 @@ class BillOfLadingExtraction(BaseModel):
     )
     place_of_issue: Optional[str] = Field(description="Place of B/L issue")
 
+    # Bổ sung thông tin quản lý
+    scac_code: Optional[str] = Field(description="Standard Carrier Alpha Code, e.g., MAEU")
+    booking_no: Optional[str] = Field(description="Booking number")
+    export_references: Optional[str] = Field(description="Export references")
+    onward_inland_routing: Optional[str] = Field(description="Onward inland routing instructions")
+
+    # Bổ sung định tuyến
+    place_of_receipt: Optional[str] = Field(description="Place of receipt for multimodal transport")
+    place_of_delivery: Optional[str] = Field(description="Place of delivery for multimodal transport")
+
+    # Bổ sung chi tiết hàng hóa
+    measurement: Optional[str] = Field(description="Volume/Measurement of goods, usually in CBM")
+    movement_type: Optional[str] = Field(description="Container movement type, e.g., FCL/FCL or CY/CY")
+
+    # Bổ sung cước phí chi tiết
+    freight_rate: Optional[str] = Field(description="Rate of freight and charges")
+    freight_currency_amount: Optional[str] = Field(description="Currency and total amount, e.g., 100,000.00 USD")
+    prepaid_amount: Optional[str] = Field(description="Amount prepaid")
+    collect_amount: Optional[str] = Field(description="Amount to collect")
+
+    # Bổ sung xác nhận cuối
+    carriers_receipt_total: Optional[str] = Field(description="Total number of containers/packages received by carrier as text, e.g., ONE (1) CONTAINERS...")
+    number_of_original_bl: Optional[str] = Field(description="Number and sequence of original B/L, e.g., THREE/3")
+    declared_value: Optional[str] = Field(description="Declared value of goods")
+    shipped_on_board_date: Optional[str] = Field(description="Actual date goods were shipped on board")
+
 
 class CommercialInvoiceExtraction(BaseModel):
     invoice_number: Optional[str] = Field(

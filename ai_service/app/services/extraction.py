@@ -173,15 +173,15 @@ def llm_to_canonical(llm_obj: dict[str, Any], doc_type: str) -> dict[str, Any]:
         canonical["shipper_exporter"] = llm_obj.get("shipper_name")
         canonical["consignee_buyer"] = llm_obj.get("consignee")
         canonical["hs_code"] = _to_text(llm_obj.get("hs_code"))
-        canonical["quantity"] = _to_text(llm_obj.get("package_quantity"))
+        canonical["quantity"] = _to_text(llm_obj.get("package_quantity") or llm_obj.get("product_quantity"))
         canonical["unit_price"] = None
-        canonical["total_amount"] = None
+        canonical["total_amount"] = _to_text(llm_obj.get("freight_currency_amount"))
         canonical["country_of_origin"] = llm_obj.get("origin")
         canonical["net_weight"] = _to_text(llm_obj.get("net_weight"))
         canonical["gross_weight"] = _to_text(llm_obj.get("gross_weight"))
         canonical["container_numbers"] = _listify(llm_obj.get("container_no"))
         canonical["bl_number"] = _to_text(llm_obj.get("bl_number"))
-        canonical["invoice_number"] = None
+        canonical["invoice_number"] = _to_text(llm_obj.get("export_references"))   
         return canonical
 
     if doc_type == "commercial_invoice":
