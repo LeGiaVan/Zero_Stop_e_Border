@@ -193,8 +193,8 @@ export default function Declaration() {
     feedbackStatus?: "idle" | "good" | "bad" | "submitted";
   };
 
-  const N8N_WEBHOOK_URL = "https://vanle044.app.n8n.cloud/webhook/6568dd1c-79bc-4110-a71f-733a9825d29a";
-  const N8N_FEEDBACK_WEBHOOK_URL = "https://vanle044.app.n8n.cloud/webhook/25b1677a-60ad-4b34-af3c-b661fd2df002";
+  const N8N_WEBHOOK_URL = import.meta.env.VITE_N8N_WEBHOOK_URL;
+  const N8N_FEEDBACK_WEBHOOK_URL = import.meta.env.VITE_N8N_FEEDBACK_WEBHOOK_URL;
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
@@ -1171,53 +1171,52 @@ export default function Declaration() {
         </div>
 
         {/* Assistant */}
-        <aside className="xl:sticky xl:top-24 h-fit">
-          <Card className="rounded-2xl border-primary-deep/30 bg-gradient-to-br from-primary via-primary to-primary-deep text-primary-foreground shadow-elegant overflow-hidden">
-            <CardHeader className="border-b border-white/10 pb-4">
+        <aside className="xl:sticky xl:top-24 h-fit xl:h-[calc(100vh-8rem)] flex flex-col">
+          <Card className="flex flex-col h-[500px] xl:h-full rounded-2xl border-border/60 shadow-card overflow-hidden bg-background">
+            <CardHeader className="border-b border-border/40 pb-4 bg-gradient-to-br from-primary via-primary to-primary-deep text-primary-foreground">
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/15 backdrop-blur-sm ring-1 ring-white/20">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/15 backdrop-blur-sm ring-1 ring-white/20 shadow-inner">
                   <Sparkles className="h-5 w-5 text-white" />
                 </div>
                 <div>
                   <CardTitle className="text-base font-semibold text-white tracking-tight">
                     Classification assistant
                   </CardTitle>
-                  <p className="text-xs text-white/75 mt-0.5">
-                    Suggestions only — always verify with official tariff tools.
+                  <p className="text-[13px] text-white/80 mt-0.5">
+                    Suggestions only — verify with official tools.
                   </p>
                 </div>
               </div>
             </CardHeader>
 
-
             <CardContent
               ref={chatContainerRef}
-              className="space-y-4 pt-4 pb-2 h-[380px] xl:h-[450px] overflow-y-auto"
+              className="flex-1 space-y-5 pt-5 pb-4 overflow-y-auto bg-muted/10 px-4 sm:px-6 scroll-smooth"
             >
               {messages.map((m, i) => (
-                <div key={m.id || i} className={`flex flex-col w-full ${m.role === "user" ? "items-end" : "items-start"}`}>
-                  <div className={`flex gap-2 max-w-[88%] ${m.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+                <div key={m.id || i} className={`flex w-full ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className={`flex gap-3 max-w-[88%] sm:max-w-[85%] ${m.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
                     {m.role === "ai" && (
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/10 mt-0.5">
-                        <Bot className="h-3.5 w-3.5" />
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary-deep shadow-sm mt-0.5">
+                        <Bot className="h-4 w-4 text-white" />
                       </div>
                     )}
-                    <div className="flex flex-col gap-2 min-w-0 w-full">
+                    <div className={`flex flex-col gap-1.5 min-w-0 ${m.role === "user" ? "items-end" : "items-start"}`}>
                       <div
-                        className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${m.role === "user"
-                          ? "bg-white text-primary-deep shadow-sm"
-                          : "bg-white/12 text-white ring-1 ring-white/10"
+                        className={`px-4 py-3 text-[14.5px] leading-relaxed whitespace-pre-wrap shadow-sm ${m.role === "user"
+                            ? "bg-primary text-primary-foreground rounded-2xl rounded-tr-sm"
+                            : "bg-background border border-border/60 text-foreground rounded-2xl rounded-tl-sm"
                           }`}
                         dangerouslySetInnerHTML={{ __html: formatMarkdown(m.text) }}
                       />
 
                       {m.role === "ai" && m.buttons && m.buttons.length > 0 && !m.buttonsHidden && (
-                        <div className="flex flex-wrap gap-1.5 mt-1">
+                        <div className="flex flex-wrap gap-2 mt-2">
                           {m.buttons.map((btn, bIdx) => (
                             <button
                               key={bIdx}
                               onClick={() => handleButtonClick(m.id, btn.action, btn.label)}
-                              className="bg-white/95 text-primary px-3 py-1.5 rounded-xl text-[13px] font-semibold hover:bg-white transition-colors border border-white/20 shadow-sm text-left"
+                              className="bg-background text-primary px-3.5 py-2 rounded-xl text-[13px] font-medium hover:bg-muted/50 transition-colors border border-primary/20 shadow-sm text-left hover:border-primary/40 active:scale-[0.98]"
                             >
                               {btn.label}
                             </button>
@@ -1226,18 +1225,18 @@ export default function Declaration() {
                       )}
 
                       {m.role === "ai" && m.id !== "welcome" && m.feedbackStatus === "idle" && (
-                        <div className="flex items-center gap-2 mt-1 px-1">
-                          <span className="text-[11px] text-white/50">Đánh giá kết quả này:</span>
+                        <div className="flex items-center gap-1.5 mt-1.5 pl-1 opacity-70 hover:opacity-100 transition-opacity">
+                          <span className="text-[11px] text-muted-foreground mr-1">Đánh giá kết quả này:</span>
                           <button
                             onClick={() => sendFeedback(m.id, m.interaction_id, "good")}
-                            className="hover:bg-white/20 transition-colors bg-white/10 rounded px-2 py-0.5 text-xs ring-1 ring-white/10"
+                            className="hover:bg-muted transition-colors rounded-full p-1.5 text-xs text-muted-foreground hover:text-emerald-500"
                             title="Hữu ích"
                           >
                             👍
                           </button>
                           <button
                             onClick={() => sendFeedback(m.id, m.interaction_id, "bad")}
-                            className="hover:bg-white/20 transition-colors bg-white/10 rounded px-2 py-0.5 text-xs ring-1 ring-white/10"
+                            className="hover:bg-muted transition-colors rounded-full p-1.5 text-xs text-muted-foreground hover:text-rose-500"
                             title="Không hữu ích"
                           >
                             👎
@@ -1246,8 +1245,8 @@ export default function Declaration() {
                       )}
 
                       {m.role === "ai" && m.feedbackStatus === "submitted" && (
-                        <div className="mt-1 px-1">
-                          <span className="text-[11px] italic text-emerald-400">
+                        <div className="mt-1 pl-1">
+                          <span className="text-[11.5px] italic text-emerald-600 dark:text-emerald-400 font-medium">
                             ✓ Cảm ơn bạn đã phản hồi!
                           </span>
                         </div>
@@ -1257,36 +1256,44 @@ export default function Declaration() {
                 </div>
               ))}
               {isTyping && (
-                <div className="flex gap-2 w-full">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/10">
-                    <Bot className="h-3.5 w-3.5" />
-                  </div>
-                  <div className="rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed bg-white/12 text-white/60 ring-1 ring-white/10 italic">
-                    Hệ thống đang xử lý...
+                <div className="flex w-full justify-start">
+                  <div className="flex gap-3 max-w-[80%] flex-row">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary-deep shadow-sm mt-0.5">
+                      <Bot className="h-4 w-4 text-white" />
+                    </div>
+                    <div className="bg-background border border-border/60 rounded-2xl rounded-tl-sm px-4 py-4 shadow-sm flex items-center justify-center h-[42px]">
+                      <div className="flex gap-1.5 items-center">
+                        <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+                        <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
             </CardContent>
 
-            <div className="p-4 pt-2 border-t border-white/10">
-              <div className="flex gap-2 rounded-xl bg-white/10 p-1.5 ring-1 ring-white/10">
-                <input
+            <div className="p-4 border-t border-border/40 bg-background">
+              <div className="flex items-end gap-2 rounded-2xl border border-input bg-transparent px-3 py-2 shadow-sm focus-within:ring-1 focus-within:ring-primary transition-all">
+                <Textarea
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") {
+                    if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
                       handleSendText();
                     }
                   }}
                   placeholder="Nhập tin nhắn..."
-                  className="flex-1 bg-transparent outline-none px-2.5 text-sm placeholder:text-white/45 text-white/90"
+                  className="min-h-[24px] max-h-[120px] flex-1 resize-none bg-transparent outline-none border-none focus-visible:ring-0 focus-visible:ring-offset-0 p-0 py-1.5 text-sm placeholder:text-muted-foreground"
+                  rows={1}
                 />
                 <Button
-                  size="sm"
+                  size="icon"
                   disabled={isTyping || !inputText.trim()}
                   onClick={handleSendText}
-                  className="h-9 shrink-0 bg-white/95 text-primary hover:bg-white disabled:opacity-50"
+                  className="h-8 w-8 shrink-0 rounded-full transition-all duration-200 ease-in-out disabled:opacity-50 mb-0.5"
+                  variant={inputText.trim() ? "default" : "secondary"}
                 >
                   <Send className="h-3.5 w-3.5" />
                 </Button>
