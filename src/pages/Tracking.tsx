@@ -1,114 +1,379 @@
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { StatusBadge } from "@/components/shared/StatusBadge";
-import { MapPin, Truck, Lock, Navigation, Clock, CheckCircle2, Circle } from "lucide-react";
+import { AlertTriangle, Lock, MapPin, Navigation, RefreshCw } from "lucide-react";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabaseClient";
+import { requestTrajectoryAnalyze } from "@/lib/declarationAiPipeline";
+import { toast } from "sonner";
 
-const events = [
-  { time: "09:42", title: "Shipment Created", place: "Shanghai Port", done: true },
-  { time: "11:18", title: "Loaded onto vessel", place: "Yangshan Terminal", done: true },
-  { time: "14:55", title: "Customs cleared (export)", place: "Shanghai Customs", done: true },
-  { time: "—", title: "Arrived at Baku Port", place: "Caspian Sea Terminal", done: true, current: true },
-  { time: "—", title: "Border clearance", place: "Astara Gate", done: false },
-  { time: "—", title: "Delivered", place: "Tbilisi Warehouse", done: false },
-];
+type ShipmentRow = {
+  id: string;
+  shipment_number: string;
+  status: string | null;
+  seal_status: string | null;
+  current_lat: number | null;
+  current_lng: number | null;
+  created_at: string | null;
+};
+
+type TrackingEventRow = {
+  id: string;
+  event_type: string;
+  event_title: string;
+  event_description: string | null;
+  location: string | null;
+  event_time: string | null;
+};
+
+type TrajectoryPointRow = {
+  point_time: string;
+  lat: number;
+  lng: number;
+  lock_status: string;
+};
+
+type TrackingSnapshot = {
+  shipment: ShipmentRow | null;
+  events: TrackingEventRow[];
+  points: TrajectoryPointRow[];
+};
+
+type RoutePoint = {
+  x: number;
+  y: number;
+  lock_status: string;
+  point_time: string;
+};
+
+async function fetchShipments(): Promise<ShipmentRow[]> {
+  const sb = getSupabaseBrowserClient();
+  if (!sb) return [];
+  const { data, error } = await sb
+    .from("shipments")
+    .select("id, shipment_number, status, seal_status, current_lat, current_lng, created_at")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) throw error;
+  return (data ?? []) as ShipmentRow[];
+}
+
+async function fetchTrackingSnapshot(shipmentId: string): Promise<TrackingSnapshot> {
+  const sb = getSupabaseBrowserClient();
+  if (!sb) throw new Error("Workspace is not configured.");
+  if (!shipmentId) return { shipment: null, events: [], points: [] };
+
+  const shipRes = await sb
+    .from("shipments")
+    .select("id, shipment_number, status, seal_status, current_lat, current_lng, created_at")
+    .eq("id", shipmentId)
+    .limit(1)
+    .maybeSingle<ShipmentRow>();
+  if (shipRes.error) throw shipRes.error;
+  if (!shipRes.data) return { shipment: null, events: [], points: [] };
+  const shipment = shipRes.data;
+
+  const [eventsRes, pointsRes] = await Promise.all([
+    sb
+      .from("tracking_events")
+      .select("id, event_type, event_title, event_description, location, event_time")
+      .eq("shipment_id", shipment.id)
+      .order("event_time", { ascending: false })
+      .limit(20),
+    sb
+      .from("trajectory_points")
+      .select("point_time, lat, lng, lock_status")
+      .eq("shipment_id", shipment.id)
+      .order("point_time", { ascending: false })
+      .limit(2000),
+  ]);
+  if (eventsRes.error) throw eventsRes.error;
+  if (pointsRes.error) throw pointsRes.error;
+
+  const points: TrajectoryPointRow[] = ((pointsRes.data ?? []) as Array<Record<string, unknown>>).map((p) => ({
+    point_time: String(p.point_time ?? ""),
+    lat: Number(p.lat ?? 0),
+    lng: Number(p.lng ?? 0),
+    lock_status: String(p.lock_status ?? "locked"),
+  }));
+
+  return {
+    shipment,
+    events: (eventsRes.data ?? []) as TrackingEventRow[],
+    points,
+  };
+}
+
+function trackingStatus(status: string | null): "pending" | "cleared" | "hold" {
+  const s = (status ?? "").toLowerCase();
+  if (s === "cleared" || s === "delivered") return "cleared";
+  if (s === "held") return "hold";
+  return "pending";
+}
+
+function toRoutePoints(rawPoints: TrajectoryPointRow[], width = 900, height = 340): RoutePoint[] {
+  if (rawPoints.length < 2) return [];
+  const ascending = [...rawPoints].sort(
+    (a, b) => new Date(a.point_time).getTime() - new Date(b.point_time).getTime()
+  );
+  const maxPoints = 450;
+  const step = Math.max(1, Math.floor(ascending.length / maxPoints));
+  const sampled = ascending.filter((_, idx) => idx % step === 0);
+
+  const lats = sampled.map((p) => p.lat);
+  const lngs = sampled.map((p) => p.lng);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+
+  const pad = 20;
+  const usableW = width - pad * 2;
+  const usableH = height - pad * 2;
+  const latRange = Math.max(maxLat - minLat, 1e-9);
+  const lngRange = Math.max(maxLng - minLng, 1e-9);
+
+  return sampled.map((p) => {
+    const x = pad + ((p.lng - minLng) / lngRange) * usableW;
+    // SVG y-axis inverted
+    const y = pad + (1 - (p.lat - minLat) / latRange) * usableH;
+    return { x, y, lock_status: p.lock_status, point_time: p.point_time };
+  });
+}
 
 export default function Tracking() {
+  const workspaceReady = isSupabaseConfigured();
+  const queryClient = useQueryClient();
+  const [selectedShipmentId, setSelectedShipmentId] = useState("");
+
+  const {
+    data: shipments = [],
+    isLoading: isLoadingShipments,
+    isError: isErrorShipments,
+    error: shipmentsError,
+  } = useQuery({
+    queryKey: ["tracking", "shipments"],
+    queryFn: fetchShipments,
+    enabled: workspaceReady,
+  });
+
+  useEffect(() => {
+    if (!selectedShipmentId && shipments.length > 0) {
+      setSelectedShipmentId(shipments[0].id);
+    }
+  }, [selectedShipmentId, shipments]);
+
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ["tracking", "snapshot", selectedShipmentId],
+    queryFn: () => fetchTrackingSnapshot(selectedShipmentId),
+    enabled: workspaceReady && !!selectedShipmentId,
+  });
+
+  const analyzeMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedShipmentId) throw new Error("Select shipment first.");
+      return requestTrajectoryAnalyze({
+        shipment_id: selectedShipmentId,
+        lookback_points: 50000,
+      });
+    },
+    onSuccess: (resp) => {
+      toast.success(
+        `Trajectory analyzed (${resp.analyzed_points} points, ${resp.anomalies.length} anomalies).`
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ["tracking", "snapshot", selectedShipmentId],
+      });
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : "Failed to analyze trajectory.");
+    },
+  });
+
+  const anomalyCount = useMemo(
+    () => (data?.events ?? []).filter((e) => e.event_type === "anomaly_detected").length,
+    [data?.events]
+  );
+
+  const routePoints = useMemo(() => toRoutePoints(data?.points ?? []), [data?.points]);
+  const routePath = useMemo(() => {
+    if (routePoints.length < 2) return "";
+    return routePoints
+      .map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+      .join(" ");
+  }, [routePoints]);
+
+  const latestPoint = data?.points?.[0];
+  const locLabel =
+    latestPoint != null
+      ? `${latestPoint.lat.toFixed(5)}, ${latestPoint.lng.toFixed(5)}`
+      : data?.shipment?.current_lat != null && data?.shipment?.current_lng != null
+      ? `${Number(data.shipment.current_lat).toFixed(5)}, ${Number(data.shipment.current_lng).toFixed(5)}`
+      : "No location yet";
+
   return (
     <>
       <PageHeader
         eyebrow="Live Operations"
         title="Shipment Tracking"
-        description="Real-time GPS, seal status, and event timeline for shipment ZSB-2401-8821."
+        description="Trajectory Guardian feed: timeline, e-seal state, and anomaly events."
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-card rounded-2xl border border-border/60 shadow-card overflow-hidden">
-          <div className="relative aspect-[16/10] bg-gradient-to-br from-primary-deep via-primary to-primary-glow overflow-hidden">
-            {/* grid pattern */}
-            <svg className="absolute inset-0 w-full h-full opacity-20" xmlns="http://www.w3.org/2000/svg">
-              <defs>
-                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                  <path d="M 40 0 L 0 0 0 40" fill="none" stroke="white" strokeWidth="0.5" />
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
-            </svg>
-
-            {/* route */}
-            <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none" viewBox="0 0 800 500">
-              <path d="M 80 380 Q 250 200 420 280 T 720 120" stroke="white" strokeWidth="3" fill="none" strokeDasharray="8 6" opacity="0.85" />
-              <circle cx="80" cy="380" r="8" fill="hsl(var(--success))" />
-              <circle cx="420" cy="280" r="10" fill="hsl(var(--warning))" className="animate-pulse" />
-              <circle cx="720" cy="120" r="8" fill="white" stroke="hsl(var(--primary-deep))" strokeWidth="3" />
-            </svg>
-
-            {/* labels */}
-            <div className="absolute top-4 left-4 right-4 flex justify-between text-white text-xs font-semibold">
-              <div className="bg-black/30 backdrop-blur px-3 py-1.5 rounded-lg">Shanghai</div>
-              <div className="bg-black/30 backdrop-blur px-3 py-1.5 rounded-lg">Tbilisi</div>
-            </div>
-
-            <div className="absolute bottom-4 left-4 bg-card/95 backdrop-blur rounded-xl p-3 shadow-elegant flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-warning/20 flex items-center justify-center">
-                <Truck className="h-5 w-5 text-warning-foreground" />
+      {!workspaceReady ? (
+        <div className="rounded-xl border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+          Tracking requires Supabase workspace configuration.
+        </div>
+      ) : isLoadingShipments ? (
+        <div className="rounded-xl border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+          Loading shipments...
+        </div>
+      ) : isErrorShipments ? (
+        <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          Unable to load shipment list:{" "}
+          {shipmentsError instanceof Error ? shipmentsError.message : "Unknown error"}
+        </div>
+      ) : shipments.length === 0 ? (
+        <div className="rounded-xl border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+          No shipments found.
+        </div>
+      ) : isLoading ? (
+        <div className="rounded-xl border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+          Loading latest trajectory snapshot...
+        </div>
+      ) : isError ? (
+        <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          Unable to load tracking data: {error instanceof Error ? error.message : "Unknown error"}
+        </div>
+      ) : !data?.shipment ? (
+        <div className="rounded-xl border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+          No shipments found.
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="bg-card rounded-2xl border border-border/60 shadow-card p-4 md:p-5">
+            <div className="flex flex-col md:flex-row md:items-center gap-3">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground min-w-[120px]">
+                Select shipment
               </div>
+              <select
+                className="h-10 rounded-lg border border-border bg-background px-3 text-sm"
+                value={selectedShipmentId}
+                onChange={(e) => setSelectedShipmentId(e.target.value)}
+              >
+                {shipments.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.shipment_number}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => analyzeMutation.mutate()}
+                disabled={!selectedShipmentId || analyzeMutation.isPending}
+                className="inline-flex items-center gap-2 h-10 px-3 rounded-lg border border-border text-sm hover:bg-muted/40 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RefreshCw className={`h-4 w-4 ${analyzeMutation.isPending ? "animate-spin" : ""}`} />
+                {analyzeMutation.isPending ? "Analyzing..." : "Analyze trajectory"}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 bg-card rounded-2xl border border-border/60 shadow-card p-6 space-y-6">
+            <div className="flex items-center justify-between">
               <div>
-                <div className="text-xs text-muted-foreground">Current Location</div>
-                <div className="font-semibold text-sm">Caspian Sea · 39.42°N, 50.18°E</div>
+                <p className="text-xs uppercase tracking-wider text-muted-foreground">Active shipment</p>
+                <h3 className="text-xl font-semibold">{data.shipment.shipment_number}</h3>
               </div>
+              <StatusBadge status={trackingStatus(data.shipment.status)} />
             </div>
-
-            <div className="absolute top-4 right-4 bg-card/95 backdrop-blur rounded-xl px-3 py-2 shadow-elegant">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">ETA</div>
-              <div className="text-sm font-bold text-primary">2d 14h</div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 divide-x divide-border/60">
-            {[
-              { icon: Navigation, label: "Speed", value: "18.4 kn" },
-              { icon: Lock, label: "Seal Status", value: "Intact", color: "text-success" },
-              { icon: MapPin, label: "Distance", value: "1,247 km" },
-            ].map((s) => (
-              <div key={s.label} className="p-4 text-center">
-                <s.icon className="h-4 w-4 mx-auto text-muted-foreground mb-1" />
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{s.label}</div>
-                <div className={`text-base font-bold ${s.color || "text-foreground"}`}>{s.value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="bg-card rounded-2xl border border-border/60 shadow-card p-6">
-          <div className="flex items-center justify-between mb-1">
-            <h3 className="text-base font-semibold">Event Timeline</h3>
-            <StatusBadge status="pending" label="In Transit" />
-          </div>
-          <p className="text-sm text-muted-foreground mb-6">ZSB-2401-8821</p>
-
-          <div className="relative space-y-5">
-            <div className="absolute left-[11px] top-2 bottom-2 w-px bg-border" />
-            {events.map((e, i) => (
-              <div key={i} className="flex gap-4 relative">
-                <div className={`relative z-10 h-6 w-6 rounded-full flex items-center justify-center shrink-0 ${
-                  e.current ? "bg-warning ring-4 ring-warning/20 animate-pulse" :
-                  e.done ? "bg-success" : "bg-muted border-2 border-border"
-                }`}>
-                  {e.done && !e.current && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
-                  {e.current && <Clock className="h-3 w-3 text-white" />}
-                  {!e.done && <Circle className="h-3 w-3 text-muted-foreground" />}
-                </div>
-                <div className="flex-1 pb-1">
-                  <div className="flex items-center gap-2">
-                    <div className={`text-sm font-semibold ${e.done ? "text-foreground" : "text-muted-foreground"}`}>{e.title}</div>
-                    {e.current && <span className="text-[10px] uppercase font-bold text-warning-foreground bg-warning/20 px-1.5 py-0.5 rounded">Now</span>}
+            <div className="rounded-xl border border-border/60 bg-gradient-to-br from-slate-900 to-slate-800 overflow-hidden">
+              <div className="h-[340px] p-2">
+                {routePoints.length < 2 ? (
+                  <div className="h-full flex items-center justify-center text-sm text-slate-300">
+                    Need at least 2 trajectory points to draw route.
                   </div>
-                  <div className="text-xs text-muted-foreground mt-0.5">{e.place} · {e.time}</div>
-                </div>
+                ) : (
+                  <svg viewBox="0 0 900 340" className="w-full h-full">
+                    <defs>
+                      <pattern id="grid-track" width="35" height="35" patternUnits="userSpaceOnUse">
+                        <path d="M 35 0 L 0 0 0 35" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="0.7" />
+                      </pattern>
+                    </defs>
+                    <rect x="0" y="0" width="900" height="340" fill="url(#grid-track)" />
+                    <path d={routePath} fill="none" stroke="#22d3ee" strokeWidth="2.5" strokeLinecap="round" />
+                    <circle cx={routePoints[0].x} cy={routePoints[0].y} r="5" fill="#22c55e" />
+                    <circle
+                      cx={routePoints[routePoints.length - 1].x}
+                      cy={routePoints[routePoints.length - 1].y}
+                      r="5"
+                      fill="#f59e0b"
+                    />
+                    {routePoints
+                      .filter((p) => ["unlocked", "open", "broken"].includes((p.lock_status || "").toLowerCase()))
+                      .slice(-40)
+                      .map((p, idx) => (
+                        <circle key={`${p.point_time}-${idx}`} cx={p.x} cy={p.y} r="3.2" fill="#ef4444" />
+                      ))}
+                  </svg>
+                )}
               </div>
-            ))}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="rounded-xl border border-border/60 p-4">
+                <MapPin className="h-4 w-4 text-muted-foreground mb-1" />
+                <div className="text-xs uppercase text-muted-foreground">Latest GPS</div>
+                <div className="text-sm font-semibold">{locLabel}</div>
+              </div>
+              <div className="rounded-xl border border-border/60 p-4">
+                <Lock className="h-4 w-4 text-muted-foreground mb-1" />
+                <div className="text-xs uppercase text-muted-foreground">Seal status</div>
+                <div className="text-sm font-semibold">{data.shipment.seal_status ?? "unknown"}</div>
+              </div>
+              <div className="rounded-xl border border-border/60 p-4">
+                <Navigation className="h-4 w-4 text-muted-foreground mb-1" />
+                <div className="text-xs uppercase text-muted-foreground">Points buffered</div>
+                <div className="text-sm font-semibold">{data.points.length}</div>
+              </div>
+            </div>
+            {anomalyCount > 0 && (
+              <div className="rounded-xl border border-warning/30 bg-warning-soft p-4 text-sm flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 mt-0.5 text-warning-foreground" />
+                <span>{anomalyCount} anomaly event(s) detected in the latest trajectory window.</span>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-card rounded-2xl border border-border/60 shadow-card p-6">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-base font-semibold">Event Timeline</h3>
+              <span className="text-xs text-muted-foreground">{data.events.length} events</span>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">{data.shipment.shipment_number}</p>
+            <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+              {data.events.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No tracking events yet.</p>
+              ) : (
+                data.events.map((event) => (
+                  <div key={event.id} className="rounded-xl border border-border/50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold">{event.event_title}</div>
+                      <span className="text-[11px] text-muted-foreground">{event.event_type}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {event.location || "Unknown location"} ·{" "}
+                      {event.event_time ? new Date(event.event_time).toLocaleString() : "n/a"}
+                    </p>
+                    {event.event_description ? (
+                      <p className="text-sm mt-2 text-muted-foreground">{event.event_description}</p>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
-      </div>
+        </div>
+      )}
     </>
   );
 }

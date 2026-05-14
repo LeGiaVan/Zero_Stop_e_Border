@@ -196,7 +196,7 @@ def process_shipment_documents(shipment_id: str) -> dict[str, Any]:
             detail=(
                 "Missing environment variables: "
                 + ", ".join(missing_env)
-                + ". Set them in ai-service/.env (see ai-service/.env.example). "
+                + ". Set them in ai_service/.env. "
                 "Use SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY from Supabase Project Settings → API."
             ),
         )

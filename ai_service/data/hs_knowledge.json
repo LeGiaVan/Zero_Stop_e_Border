@@ -1,0 +1,33 @@
+[
+  {
+    "hs_code": "0804.40.00",
+    "title": "Fresh avocado",
+    "description": "Fresh avocados, whole fruit, not frozen, for direct consumption.",
+    "legal_basis": [
+      "AHTN Chapter 08 - Edible fruit and nuts",
+      "Explanatory notes heading 0804"
+    ],
+    "source": "seed_data"
+  },
+  {
+    "hs_code": "0901.21.10",
+    "title": "Roasted coffee beans, not decaffeinated",
+    "description": "Roasted Arabica or Robusta coffee beans, not decaffeinated, packed in retail bags.",
+    "legal_basis": [
+      "AHTN Chapter 09 - Coffee, tea, mate and spices",
+      "Explanatory notes heading 0901"
+    ],
+    "source": "seed_data"
+  },
+  {
+    "hs_code": "1006.30.99",
+    "title": "Semi-milled or wholly milled rice",
+    "description": "Processed white rice grains, semi-milled or wholly milled, for food distribution.",
+    "legal_basis": [
+      "AHTN Chapter 10 - Cereals",
+      "Heading 1006 and related subheading notes"
+    ],
+    "source": "seed_data"
+  }
+]
+

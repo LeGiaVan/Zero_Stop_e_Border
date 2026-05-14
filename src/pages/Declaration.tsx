@@ -30,7 +30,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
-import { requestDeclarationDocumentProcessing } from "@/lib/declarationAiPipeline";
+import {
+  requestDeclarationDocumentProcessing,
+  requestHsConfirm,
+  requestHsSuggestion,
+} from "@/lib/declarationAiPipeline";
 import {
   getSupabaseBrowserClient,
   isSupabaseConfigured,
@@ -189,152 +193,34 @@ export default function Declaration() {
     text: string;
     buttons?: { label: string; action: string }[];
     buttonsHidden?: boolean;
+    legalBasis?: string[];
     interaction_id?: string;
-    feedbackStatus?: "idle" | "good" | "bad" | "submitted";
+    feedbackStatus?: "idle" | "submitted";
   };
 
-  const N8N_WEBHOOK_URL = "https://vanle044.app.n8n.cloud/webhook/6568dd1c-79bc-4110-a71f-733a9825d29a";
-  const N8N_FEEDBACK_WEBHOOK_URL = "https://vanle044.app.n8n.cloud/webhook/25b1677a-60ad-4b34-af3c-b661fd2df002";
+  const hsAdvisorMode =
+    (import.meta.env.VITE_HS_ADVISOR_MODE?.trim().toLowerCase() || "n8n") === "inhouse"
+      ? "inhouse"
+      : "n8n";
+  const N8N_WEBHOOK_URL =
+    import.meta.env.VITE_N8N_WEBHOOK_URL?.trim() || "";
+  const N8N_FEEDBACK_WEBHOOK_URL =
+    import.meta.env.VITE_N8N_FEEDBACK_WEBHOOK_URL?.trim() || "";
+
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
       role: "ai",
-      text: "Xin chào! Tôi là trợ lý AI. Vui lòng nhập tên và mô tả mặt hàng nông sản bạn cần tra cứu mã HS.",
+      text:
+        hsAdvisorMode === "n8n"
+          ? "Xin chào! Tôi là trợ lý AI. Vui lòng nhập tên và mô tả mặt hàng nông sản bạn cần tra cứu mã HS."
+          : "Xin chào! Tôi là HS-Advisor nội bộ. Hãy mô tả mặt hàng để tôi đề xuất mã HS và căn cứ pháp lý.",
     },
   ]);
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [sessionId, setSessionId] = useState<string>("");
   const chatContainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    let storedSession = localStorage.getItem("chatbot_session_id");
-    if (!storedSession) {
-      storedSession = "session_" + Math.random().toString(36).substring(2, 15);
-      localStorage.setItem("chatbot_session_id", storedSession);
-    }
-    setSessionId(storedSession);
-  }, []);
-
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTo({
-        top: chatContainerRef.current.scrollHeight,
-        behavior: "smooth"
-      });
-    }
-  }, [messages, isTyping]);
-
-  const sendDataToServer = useCallback(async (type: "text" | "button", payloadData: string, displayText: string) => {
-    if (isTyping) return;
-
-    setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", text: displayText }]);
-    setIsTyping(true);
-
-    try {
-      const response = await fetch(N8N_WEBHOOK_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          session_id: sessionId,
-          type: type,
-          data: payloadData,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Lỗi phản hồi từ server");
-      }
-
-      const responseData = await response.json();
-
-      let botText = "";
-      if (typeof responseData.reply === "string") {
-        botText = responseData.reply;
-      } else if (typeof responseData.reply === "object" && responseData.reply !== null) {
-        const replyObj = responseData.reply;
-        if (replyObj.type === "hs_code" && replyObj.properties) {
-          const hs = replyObj.properties.hs_code;
-          const exp = replyObj.properties.explanation;
-          botText = `<b>Mã HS:</b> <span class="font-bold text-amber-300">${hs?.type || ""}</span> - ${hs?.description || ""}\n\n<b>Giải thích (${exp?.type || ""}):</b>\n${exp?.description || ""}`;
-        } else {
-          botText = JSON.stringify(replyObj, null, 2);
-        }
-      } else if (responseData.answer) {
-        botText = typeof responseData.answer === "string" ? responseData.answer : JSON.stringify(responseData.answer, null, 2);
-      }
-
-      if (botText) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: Date.now().toString() + "_bot",
-            role: "ai",
-            text: botText,
-            buttons: responseData.buttons || [],
-            interaction_id: responseData.interaction_id,
-            feedbackStatus: "idle",
-          }
-        ]);
-      } else {
-        setMessages((prev) => [
-          ...prev,
-          { id: Date.now().toString() + "_err", role: "ai", text: 'Đã nhận phản hồi nhưng thiếu key "reply" hợp lệ. Vui lòng kiểm tra lại n8n.' },
-        ]);
-      }
-    } catch (error) {
-      console.error("Chat error:", error);
-      setMessages((prev) => [
-        ...prev,
-        { id: Date.now().toString() + "_err2", role: "ai", text: "Xin lỗi, không thể kết nối tới server. Vui lòng kiểm tra lại Webhook URL." },
-      ]);
-    } finally {
-      setIsTyping(false);
-    }
-  }, [isTyping, sessionId]);
-
-  const sendFeedback = async (messageId: string, interactionId: string | undefined, rating: "good" | "bad") => {
-    setMessages((prev) =>
-      prev.map((msg) => (msg.id === messageId ? { ...msg, feedbackStatus: "submitted" } : msg))
-    );
-    try {
-      await fetch(N8N_FEEDBACK_WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          interaction_id: interactionId || messageId,
-          rating: rating,
-          timestamp: new Date().toISOString(),
-        }),
-      });
-    } catch (err) {
-      console.error("Lỗi gửi feedback:", err);
-    }
-  };
-
-  const formatMarkdown = (text: string) => {
-    let html = text.replace(/\*\*(.*?)\*\*/g, '<strong class="text-amber-300 font-bold">$1</strong>');
-    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
-    html = html.replace(/\n/g, '<br/>');
-    return html;
-  };
-
-  // CHATBOT ABOVE
-
-  const handleSendText = useCallback(() => {
-    const text = inputText.trim();
-    if (!text) return;
-    setInputText("");
-    void sendDataToServer("text", text, text);
-  }, [inputText, sendDataToServer]);
-
-  const handleButtonClick = useCallback((msgId: string, action: string, label: string) => {
-    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, buttonsHidden: true } : m));
-    void sendDataToServer("button", action, `[Đã chọn: ${label}]`);
-  }, [sendDataToServer]);
-
   const [shipment, setShipment] = useState<ShipmentForm>(() => emptyShipment());
   const [documents, setDocuments] = useState<DocRow[]>([
     { id: newRowId(), doc_type: "invoice", file: null, document_ref_number: "", document_date: "" },
@@ -359,6 +245,216 @@ export default function Declaration() {
   const patchShipment = useCallback((patch: Partial<ShipmentForm>) => {
     setShipment((s) => ({ ...s, ...patch }));
   }, []);
+
+  useEffect(() => {
+    let storedSession = localStorage.getItem("chatbot_session_id");
+    if (!storedSession) {
+      storedSession = "session_" + Math.random().toString(36).substring(2, 15);
+      localStorage.setItem("chatbot_session_id", storedSession);
+    }
+    setSessionId(storedSession);
+  }, []);
+
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
+    }
+  }, [messages, isTyping]);
+
+  const sendFeedback = useCallback(
+    async (messageId: string, interactionId: string | undefined) => {
+      if (hsAdvisorMode !== "n8n") return;
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === messageId ? { ...msg, feedbackStatus: "submitted" } : msg))
+      );
+      try {
+        await fetch(N8N_FEEDBACK_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            interaction_id: interactionId || messageId,
+            rating: "good",
+            timestamp: new Date().toISOString(),
+          }),
+        });
+      } catch (err) {
+        console.error("Feedback error:", err);
+      }
+    },
+    [N8N_FEEDBACK_WEBHOOK_URL, hsAdvisorMode]
+  );
+
+  const sendDataToServer = useCallback(async (type: "text" | "button", payloadData: string, displayText: string) => {
+    if (isTyping) return;
+
+    setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", text: displayText }]);
+    setIsTyping(true);
+
+    try {
+      if (hsAdvisorMode === "n8n") {
+        const response = await fetch(N8N_WEBHOOK_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            session_id: sessionId,
+            type: type,
+            data: payloadData,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error("Lỗi phản hồi từ server");
+        }
+        const responseData = await response.json();
+        let botText = "";
+        if (typeof responseData.reply === "string") {
+          botText = responseData.reply;
+        } else if (typeof responseData.reply === "object" && responseData.reply !== null) {
+          const replyObj = responseData.reply;
+          if (replyObj.type === "hs_code" && replyObj.properties) {
+            const hs = replyObj.properties.hs_code;
+            const exp = replyObj.properties.explanation;
+            botText = `<b>Mã HS:</b> <span class="font-bold text-amber-300">${hs?.type || ""}</span> - ${hs?.description || ""}\n\n<b>Giải thích (${exp?.type || ""}):</b>\n${exp?.description || ""}`;
+          } else {
+            botText = JSON.stringify(replyObj, null, 2);
+          }
+        } else if (responseData.answer) {
+          botText =
+            typeof responseData.answer === "string"
+              ? responseData.answer
+              : JSON.stringify(responseData.answer, null, 2);
+        }
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}_bot`,
+            role: "ai",
+            text:
+              botText ||
+              'Đã nhận phản hồi nhưng thiếu key "reply" hợp lệ. Vui lòng kiểm tra lại workflow n8n.',
+            buttons: Array.isArray(responseData.buttons) ? responseData.buttons : [],
+            interaction_id: responseData.interaction_id,
+            feedbackStatus: "idle",
+          },
+        ]);
+        return;
+      }
+
+      if (type === "button" && payloadData.startsWith("CONFIRM_HS:")) {
+        const hsCode = payloadData.replace("CONFIRM_HS:", "").trim();
+        if (!hsCode) throw new Error("Mã HS không hợp lệ.");
+        const latestAi = [...messages].reverse().find((m) => m.role === "ai" && m.legalBasis);
+        const legalBasis = latestAi?.legalBasis ?? [];
+        await requestHsConfirm({
+          shipment_id: undefined,
+          hs_code: hsCode,
+          legal_basis: legalBasis,
+          note: "Confirmed from declaration assistant.",
+        });
+        setShipment((prev) => ({ ...prev, hs_code: hsCode }));
+        setItems((rows) =>
+          rows.map((r, i) =>
+            i === 0
+              ? {
+                  ...r,
+                  hs_code: hsCode,
+                  legal_references:
+                    legalBasis.length > 0 ? JSON.stringify(legalBasis, null, 2) : r.legal_references,
+                }
+              : r
+          )
+        );
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}_confirm`,
+            role: "ai",
+            text: `Đã chốt mã HS ${hsCode} vào tờ khai hiện tại.`,
+          },
+        ]);
+        return;
+      }
+
+      const suggest = await requestHsSuggestion({
+        session_id: sessionId,
+        shipment_id: undefined,
+        product_name: shipment.product_description || payloadData,
+        product_description: payloadData,
+        product_context: `Origin: ${shipment.origin_country || "N/A"}; Destination: ${
+          shipment.destination_country || "N/A"
+        }; Existing HS: ${shipment.hs_code || "N/A"}`,
+      });
+
+      const confidencePct = Math.round((suggest.confidence || 0) * 100);
+      const lines = [
+        suggest.best_hs_code ? `**Mã HS đề xuất:** ${suggest.best_hs_code}` : "**Mã HS đề xuất:** Chưa đủ dữ liệu",
+        `**Độ tin cậy:** ${confidencePct}%`,
+        "",
+        "**Giải thích:**",
+        suggest.reasoning,
+      ];
+      if (suggest.legal_basis.length > 0) {
+        lines.push("", "**Căn cứ pháp lý:**");
+        for (const lb of suggest.legal_basis) lines.push(`- ${lb}`);
+      }
+      if (suggest.questions_missing.length > 0) {
+        lines.push("", "**Cần bổ sung:**");
+        for (const q of suggest.questions_missing) lines.push(`- ${q}`);
+      }
+
+      const confirmButtons = suggest.hs_code_candidates
+        .slice(0, 4)
+        .map((code) => ({ label: `Chốt ${code}`, action: `CONFIRM_HS:${code}` }));
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}_bot`,
+          role: "ai",
+          text: lines.join("\n"),
+          buttons: confirmButtons,
+          legalBasis: suggest.legal_basis,
+        },
+      ]);
+    } catch (error) {
+      console.error("Chat error:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}_err2`,
+          role: "ai",
+          text: "Xin lỗi, không thể kết nối HS-Advisor service. Hãy kiểm tra `VITE_AI_API_BASE_URL` và `ai_service`.",
+        },
+      ]);
+    } finally {
+      setIsTyping(false);
+    }
+  }, [N8N_WEBHOOK_URL, hsAdvisorMode, isTyping, messages, sessionId, shipment.destination_country, shipment.hs_code, shipment.origin_country, shipment.product_description]);
+
+  const formatMarkdown = (text: string) => {
+    let html = text.replace(/\*\*(.*?)\*\*/g, '<strong class="text-amber-300 font-bold">$1</strong>');
+    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    html = html.replace(/\n/g, '<br/>');
+    return html;
+  };
+
+  // CHATBOT ABOVE
+
+  const handleSendText = useCallback(() => {
+    const text = inputText.trim();
+    if (!text) return;
+    setInputText("");
+    void sendDataToServer("text", text, text);
+  }, [inputText, sendDataToServer]);
+
+  const handleButtonClick = useCallback((msgId: string, action: string, label: string) => {
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, buttonsHidden: true } : m));
+    void sendDataToServer("button", action, `[Đã chọn: ${label}]`);
+  }, [sendDataToServer]);
 
   const addDocRow = () =>
     setDocuments((d) => [
@@ -1225,33 +1321,28 @@ export default function Declaration() {
                         </div>
                       )}
 
-                      {m.role === "ai" && m.id !== "welcome" && m.feedbackStatus === "idle" && (
-                        <div className="flex items-center gap-2 mt-1 px-1">
-                          <span className="text-[11px] text-white/50">Đánh giá kết quả này:</span>
-                          <button
-                            onClick={() => sendFeedback(m.id, m.interaction_id, "good")}
-                            className="hover:bg-white/20 transition-colors bg-white/10 rounded px-2 py-0.5 text-xs ring-1 ring-white/10"
-                            title="Hữu ích"
-                          >
-                            👍
-                          </button>
-                          <button
-                            onClick={() => sendFeedback(m.id, m.interaction_id, "bad")}
-                            className="hover:bg-white/20 transition-colors bg-white/10 rounded px-2 py-0.5 text-xs ring-1 ring-white/10"
-                            title="Không hữu ích"
-                          >
-                            👎
-                          </button>
+                      {hsAdvisorMode === "n8n" &&
+                        m.role === "ai" &&
+                        m.id !== "welcome" &&
+                        m.feedbackStatus === "idle" && (
+                          <div className="flex items-center gap-2 mt-1 px-1">
+                            <span className="text-[11px] text-white/50">Đánh giá kết quả này:</span>
+                            <button
+                              onClick={() => sendFeedback(m.id, m.interaction_id)}
+                              className="hover:bg-white/20 transition-colors bg-white/10 rounded px-2 py-0.5 text-xs ring-1 ring-white/10"
+                              title="Hữu ích"
+                            >
+                              👍
+                            </button>
+                          </div>
+                        )}
+
+                      {hsAdvisorMode === "n8n" && m.role === "ai" && m.feedbackStatus === "submitted" && (
+                        <div className="mt-1 px-1">
+                          <span className="text-[11px] italic text-emerald-400">✓ Cảm ơn bạn đã phản hồi!</span>
                         </div>
                       )}
 
-                      {m.role === "ai" && m.feedbackStatus === "submitted" && (
-                        <div className="mt-1 px-1">
-                          <span className="text-[11px] italic text-emerald-400">
-                            ✓ Cảm ơn bạn đã phản hồi!
-                          </span>
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>

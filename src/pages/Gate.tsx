@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Container,
@@ -16,6 +17,9 @@ import {
   ImageIcon,
   TableProperties,
 } from "lucide-react";
+import { toast } from "sonner";
+import { requestGateScan } from "@/lib/declarationAiPipeline";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabaseClient";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -45,6 +49,13 @@ interface ScanLogEntry {
   source: string;       // filename / sample name
   time_ms: number;
   timestamp: string;    // HH:MM:SS
+}
+
+interface ShipmentOption {
+  id: string;
+  shipment_number: string;
+  container_id: string | null;
+  license_plate: string | null;
 }
 
 // ── Config ───────────────────────────────────────────────────────────
@@ -93,6 +104,18 @@ const statusShadow: Record<string, string> = {
 
 function nowHHMMSS() {
   return new Date().toLocaleTimeString("en-GB", { hour12: false });
+}
+
+async function fetchRecentShipments(): Promise<ShipmentOption[]> {
+  const sb = getSupabaseBrowserClient();
+  if (!sb) return [];
+  const { data, error } = await sb
+    .from("shipments")
+    .select("id, shipment_number, container_id, license_plate")
+    .order("created_at", { ascending: false })
+    .limit(30);
+  if (error) throw error;
+  return (data ?? []) as ShipmentOption[];
 }
 
 function StatusBadge({ status }: { status: DetectStatus }) {
@@ -166,6 +189,7 @@ function LoadingOverlay() {
 
 export default function Gate() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const workspaceReady = isSupabaseConfigured();
 
   // image state
   const [currentFile, setCurrentFile] = useState<File | null>(null);
@@ -189,6 +213,22 @@ export default function Gate() {
   const [selectedSample, setSelectedSample] = useState<string>("");
   const [autoDetect, setAutoDetect] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
+  const [selectedShipmentId, setSelectedShipmentId] = useState("");
+  const [gateDecision, setGateDecision] = useState<"pass" | "hold" | null>(null);
+  const [gateReasons, setGateReasons] = useState<string[]>([]);
+  const [gateBusy, setGateBusy] = useState(false);
+
+  const { data: shipments = [] } = useQuery({
+    queryKey: ["gate", "shipments"],
+    queryFn: fetchRecentShipments,
+    enabled: workspaceReady,
+  });
+
+  useEffect(() => {
+    if (!selectedShipmentId && shipments.length > 0) {
+      setSelectedShipmentId(shipments[0].id);
+    }
+  }, [selectedShipmentId, shipments]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -298,9 +338,10 @@ export default function Gate() {
       const fd = new FormData();
       fd.append("file", blob, filename);
       await _callAPI(fd, label);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to load sample image";
       setProcTime("Error");
-      setErrMsg(err.message || "Failed to load sample image");
+      setErrMsg(message);
       setLoading(false);
     }
   };
@@ -342,12 +383,51 @@ export default function Gate() {
         ...prev,
       ]);
       setScanCounter((c) => c + 1);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
       setProcTime("Error");
-      setErrMsg(err.message || "Unknown error");
+      setErrMsg(message);
       setResult(null);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const runGateDecision = async () => {
+    if (!workspaceReady) {
+      toast.error("Gate decision requires Supabase workspace configuration.");
+      return;
+    }
+    if (!selectedShipmentId) {
+      toast.error("Select a shipment first.");
+      return;
+    }
+    if (!result) {
+      toast.error("Run container detection first.");
+      return;
+    }
+    setGateBusy(true);
+    try {
+      const out = await requestGateScan({
+        shipment_id: selectedShipmentId,
+        detected_container_id: result.full_number || undefined,
+        vision_status: result.status,
+        vision_confidence: Number.isFinite(result.confidence) ? result.confidence : undefined,
+        scan_details: {
+          source: sourceName,
+          processing_time_ms: result.processing_time_ms,
+          owner_code: result.owner_code,
+          serial_number: result.serial_number,
+          check_digit: result.check_digit,
+        },
+      });
+      setGateDecision(out.decision);
+      setGateReasons(out.reasons || []);
+      toast.success(out.decision === "pass" ? "Gate PASS decision recorded." : "Gate HOLD decision recorded.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to evaluate gate decision.");
+    } finally {
+      setGateBusy(false);
     }
   };
 
@@ -360,6 +440,8 @@ export default function Gate() {
     setErrMsg(null);
     setSourceName("");
     setSelectedSample("");
+    setGateDecision(null);
+    setGateReasons([]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -447,6 +529,20 @@ export default function Gate() {
           )}
         </div>
 
+        <select
+          value={selectedShipmentId}
+          onChange={(e) => setSelectedShipmentId(e.target.value)}
+          className="px-3 py-2 rounded-xl text-sm bg-card border border-border/60 min-w-[220px]"
+          disabled={!workspaceReady}
+        >
+          <option value="">{workspaceReady ? "Select shipment" : "Supabase not configured"}</option>
+          {shipments.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.shipment_number}
+            </option>
+          ))}
+        </select>
+
         {/* Run detect */}
         <button
           onClick={runDetect}
@@ -464,6 +560,15 @@ export default function Gate() {
         >
           <Trash2 className="h-4 w-4 opacity-70" />
           Clear
+        </button>
+
+        <button
+          onClick={runGateDecision}
+          disabled={!selectedShipmentId || !result || gateBusy}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-emerald-600 text-white hover:opacity-90 transition-opacity disabled:opacity-35 disabled:cursor-not-allowed"
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          {gateBusy ? "Evaluating..." : "Evaluate Gate"}
         </button>
 
         {/* Conf slider */}
@@ -697,6 +802,41 @@ export default function Gate() {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="bg-card rounded-2xl p-5 border border-border/60 shadow-card">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold">Gate Clearance</h3>
+              <span
+                className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                  gateDecision === "pass"
+                    ? "bg-success/10 text-success"
+                    : gateDecision === "hold"
+                    ? "bg-destructive/10 text-destructive"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {gateDecision ? gateDecision.toUpperCase() : "PENDING"}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground mb-3">
+              {selectedShipmentId
+                ? `Shipment selected: ${
+                    shipments.find((s) => s.id === selectedShipmentId)?.shipment_number ?? "Unknown"
+                  }`
+                : "Select a shipment and run detection first."}
+            </p>
+            {gateReasons.length > 0 ? (
+              <ul className="space-y-1.5">
+                {gateReasons.map((r, idx) => (
+                  <li key={`${r}-${idx}`} className="text-xs text-muted-foreground">
+                    - {r}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-muted-foreground">No gate decision evaluated yet.</p>
+            )}
           </div>
 
           {/* Recent detections (last 6) */}

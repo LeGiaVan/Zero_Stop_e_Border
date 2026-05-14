@@ -6,3 +6,6 @@ uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
 pydantic>=2.0
 supabase
+qdrant-client>=1.10.1
+numpy>=1.26.0
+scikit-learn>=1.4.0

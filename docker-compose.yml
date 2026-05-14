@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: borderflow-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  ai_service:
+    build:
+      context: ./ai_service
+      dockerfile: Dockerfile
+    container_name: borderflow-ai-service
+    depends_on:
+      - qdrant
+    env_file:
+      - ./ai_service/.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - QDRANT_URL=http://qdrant:6333
+    ports:
+      - "8000:8000"
+
+volumes:
+  qdrant_data:
+

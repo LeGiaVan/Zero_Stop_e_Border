@@ -11,11 +11,18 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 import pdfplumber
 from openai import OpenAI
+
+current_file = Path(__file__).resolve()
+ai_service_dir = current_file.parents[2] 
+
+if str(ai_service_dir) not in sys.path:
+    sys.path.insert(0, str(ai_service_dir))
 
 from app.core.config import AI_SERVICE_ROOT, PROJECT_ROOT, get_openai_model, load_app_env
 from app.models.extractions import (
@@ -394,7 +401,7 @@ def process_pdf(
 
 
 def default_data_dir() -> Path:
-    return PROJECT_ROOT / "data"
+    return AI_SERVICE_ROOT / "data"
 
 
 def main() -> None:
@@ -416,8 +423,8 @@ def main() -> None:
         "-o",
         "--output-dir",
         type=Path,
-        default=AI_SERVICE_ROOT / "output",
-        help="Directory for JSON files (default: ai-service/output)",
+        default=AI_SERVICE_ROOT / "outputs",
+        help="Directory for JSON files (default: ai-service/outputs)",
     )
     parser.add_argument(
         "--model",

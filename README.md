@@ -1,8 +1,8 @@
 # Borderflow AI
 
-**Zero-Stop E-Border** — a web platform for smart customs workflows: digitized declarations, document uploads, AI-assisted HS classification assistance, structured document extraction and verification, shipment tracking, risk visualization, gate simulation, and admin tooling.
+**Zero-Stop E-Border** — a web platform for smart customs workflows: digitized declarations, document uploads, AI-assisted HS classification, structured document extraction and verification, trajectory anomaly monitoring, border gate decisioning, and admin tooling.
 
-The front end is a **Vite**, **React 18**, and **TypeScript** single-page application, styled with **Tailwind CSS** and **shadcn/ui**, with **TanStack Query**, **React Router**, and **Recharts**. Persistence and authentication are integrated with **Supabase** (PostgreSQL schema in `supabase/migrations/schema.sql`). Document intelligence is handled by an optional Python **FastAPI** service under `ai-service/`.
+The front end is a **Vite**, **React 18**, and **TypeScript** single-page application, styled with **Tailwind CSS** and **shadcn/ui**, with **TanStack Query**, **React Router**, and **Recharts**. Persistence and authentication are integrated with **Supabase** (PostgreSQL schema in `supabase/migrations/schema.sql`). AI workloads are served by a Python **FastAPI** service under `ai_service/`.
 
 ---
 
@@ -24,7 +24,9 @@ Demo accounts:
 
 ### AI HS-Advisor (Smart Declaration)
 
-An assistant suggests HS-oriented guidance via an external automation workflow ([n8n](https://n8n.io)): the UI posts chat messages to a configured webhook (see `src/pages/Declaration.tsx`). Workflow export for reference: `HS_Code_Recommender.json` (agent + retrieval over a vector database).
+The declaration assistant supports dual mode:
+- `n8n` mode (default for current MVP): use your existing webhook flow.
+- `inhouse` mode: call `ai_service` APIs (`/api/hs/suggest`, `/api/hs/confirm`) with Qdrant retrieval (or local fallback seed `ai_service/data/hs_knowledge.json`).
 
 <p align="center">
   <img src="./public/gif/hs_code.gif" alt="AI HS-Advisor" width="720" />
@@ -36,15 +38,15 @@ An assistant suggests HS-oriented guidance via an external automation workflow (
 
 ### AI Auditor Agent (verification pipeline)
 
-Uploaded PDFs (invoices, packing lists, etc.) are processed by **`ai-service`**: text extraction from PDFs, structured field inference via **OpenAI** chat models, normalization, and deterministic comparison against the saved declaration to populate verification status and mismatch fields in Supabase.
+Uploaded PDFs (invoices, packing lists, etc.) are processed by **`ai_service`**: text extraction from PDFs, structured field inference via **OpenAI** chat models, normalization, and deterministic comparison against the saved declaration to populate verification status and mismatch fields in Supabase.
 
 <p align="center">
   <img src="./public/gif/verification.gif" alt="Document verification" width="720" />
 </p>
 
-### Vision Edge Gate (simulation)
+### Vision Edge Gate (decision-enabled MVP)
 
-A **UI simulation** of ANPR-style checks and container identification with PASS/HOLD outcomes. Not wired to an on-device vision model in this repository.
+The UI performs container OCR via a detection endpoint, then posts to `/api/gate/scan`. Gate PASS/HOLD is decided from three checks: document verification, trajectory anomalies, and container/plate match against declaration.
 
 <p align="center">
   <img src="./public/gif/AI_Vision.gif" alt="Gate simulation" width="720" />
@@ -59,9 +61,9 @@ A **UI simulation** of ANPR-style checks and container identification with PASS/
 | **Dashboard** | Shipment KPIs, risk share, timelines |
 | **Declaration** | Shipment capture, PDF attachments, HS assistant chat |
 | **Verification** | Extracted fields, declaration-vs-document comparison, re-scan orchestration via API |
-| **Tracking** | Map-oriented route and event timeline |
-| **Risk analysis** | Score and narrative-style UI (risk rules for stored scores are separate from HS webhook) |
-| **Border gate** | Simulated scans vs declaration |
+| **Tracking** | DB-backed trajectory feed (`trajectory_points`) + anomaly timeline (`tracking_events`) |
+| **Risk analysis** | DB-backed score synthesis from verification, trajectory anomalies, and gate outcomes |
+| **Border gate** | Detection + `/api/gate/scan` PASS/HOLD decision persisted to `border_scans` |
 | **Admin** | Profiles, audit-style logs, AI settings placeholders |
 
 ---
@@ -71,9 +73,13 @@ A **UI simulation** of ANPR-style checks and container identification with PASS/
 ```
 Browser (React) ──► Supabase (auth, Postgres, Storage)
        │
-       ├──► Webhook URL (HS assistant / n8n)
+       ├──► ai_service `/api/hs/*` (HS advisor)
        │
-       └──► ai-service FastAPI ──► OpenAI ──► updates documents.* via Supabase service role
+       ├──► ai_service `/api/declaration/process-documents` (auditor)
+       │
+       ├──► ai_service `/api/trajectory/*` (guardian)
+       │
+       └──► ai_service `/api/gate/scan` (gate decision)
 ```
 
 | Layer | Technologies |
@@ -81,8 +87,8 @@ Browser (React) ──► Supabase (auth, Postgres, Storage)
 | **Web** | React 18, TypeScript, Vite, TanStack Query, React Router, Recharts |
 | **UI** | Radix primitives, Tailwind CSS, shadcn/ui patterns |
 | **Backend (data)** | Supabase (PostgreSQL + Auth + Storage) |
-| **Document AI** | Python 3, FastAPI, OpenAI API, pdfplumber, Pydantic |
-| **Automation (HS)** | n8n workflow (export in repo); stack in export includes retrieval (e.g. Qdrant) and hosted LLMs per your deployment |
+| **AI Service** | Python 3, FastAPI, OpenAI API, pdfplumber, Pydantic, scikit-learn |
+| **Vector Retrieval** | Qdrant (optional, for HS advisor context); local fallback seed JSON |
 
 ---
 
@@ -93,9 +99,9 @@ Browser (React) ──► Supabase (auth, Postgres, Storage)
 | `src/pages/` | Feature routes: Dashboard, Declaration, Verification, Tracking, Risk, Gate, Admin |
 | `src/components/` | Shared layout, widgets, charts |
 | `src/lib/` | Supabase helpers, AI pipeline client (`declarationAiPipeline.ts`) |
-| `ai-service/` | FastAPI — `/api/verify`, `/api/declaration/process-documents`, health route |
+| `ai_service/` | FastAPI — HS advisor, auditor, trajectory guardian, gate decision |
 | `supabase/migrations/` | PostgreSQL schema, indexes, policies |
-| `HS_Code_Recommender.json` | Exported n8n workflow for HS assistant (credentials not included) |
+| `ai-manager/AI HS-Advisor/HS_Code_Recommender.json` | Legacy n8n workflow export (reference only) |
 
 ---
 
@@ -104,7 +110,7 @@ Browser (React) ──► Supabase (auth, Postgres, Storage)
 - **Node.js** 18+ (20+ recommended)
 - **npm**
 - **Supabase project** — required for full declaration save, uploads, and post-save AI processing
-- **Python 3.10+** — only if you run `ai-service` locally
+- **Python 3.10+** — only if you run `ai_service` locally
 
 ---
 
@@ -133,7 +139,7 @@ npm test
 
 ### Front-end environment variables
 
-Create `.env.local` at the repo root (Vite exposes only variables prefixed with `VITE_`):
+Create `.env` at the repo root. Vite exposes only variables prefixed with `VITE_`:
 
 | Variable | Required | Description |
 |----------|----------|--------------|
@@ -141,17 +147,24 @@ Create `.env.local` at the repo root (Vite exposes only variables prefixed with 
 | `VITE_SUPABASE_ANON_KEY` | Same | Anonymous (public) key |
 | `VITE_SUPABASE_BUCKET` | Optional | Storage bucket name (default `documents`) |
 | `VITE_AI_API_BASE_URL` | Optional | AI service origin (default `http://127.0.0.1:8000`) |
+| `VITE_HS_ADVISOR_MODE` | Optional | `n8n` (default) or `inhouse` |
+| `VITE_N8N_WEBHOOK_URL` | Optional | HS advisor webhook URL when mode is `n8n` |
+| `VITE_N8N_FEEDBACK_WEBHOOK_URL` | Optional | Feedback webhook URL when mode is `n8n` |
 
 Without Supabase credentials, the app degrades gracefully but saving declarations and triggering document processing will not work.
 
 ---
 
-## Local development — AI service (`ai-service`)
+## Local development — AI service (`ai_service`)
 
-Runs the extraction and verification API used after a declaration with PDFs is saved (and for manual `/api/verify`).
+Runs all MVP APIs:
+- `/api/hs/suggest`, `/api/hs/confirm`
+- `/api/declaration/process-documents`, `/api/verify`
+- `/api/trajectory/ingest`, `/api/trajectory/analyze`
+- `/api/gate/scan`
 
 ```bash
-cd ai-service
+cd ai_service
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
@@ -164,7 +177,7 @@ Ensure the web app points to this service (`VITE_AI_API_BASE_URL`).
 
 ### AI service environment variables
 
-Set in **`ai-service/.env`** or the repository root `.env` (both are loaded by the service):
+Set in **`ai_service/.env`**:
 
 | Variable | Description |
 |----------|--------------|
@@ -172,14 +185,30 @@ Set in **`ai-service/.env`** or the repository root `.env` (both are loaded by t
 | `OPENAI_MODEL` | Optional chat model override (default `gpt-4o-mini`) |
 | `SUPABASE_URL` | Required for `/api/declaration/process-documents` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Required to read Storage and write `documents` |
+| `QDRANT_URL` | Optional but recommended for HS retrieval |
+| `QDRANT_COLLECTION_NAME` | Optional collection name (default `hs_codes_agriculture_viet`) |
+| `HS_EMBEDDING_MODEL` | Optional embedding model for retrieval/ingestion |
 
 `CORS_ORIGINS` can override allowed browser origins for the FastAPI host.
+
+### Optional: Docker Compose (ai_service + Qdrant)
+
+```bash
+# ensure ai_service/.env exists before running
+docker compose up --build
+```
+
+Then keep frontend running with:
+
+```bash
+npm run dev
+```
 
 ---
 
 ## Database
 
-Apply `supabase/migrations/schema.sql` via the Supabase SQL editor or CLI so tables and policies match the application.
+Apply `supabase/migrations/schema.sql` and follow-up alignment migrations in `supabase/migrations/` via Supabase SQL editor or CLI.
 
 **Core entities:**
 
@@ -187,6 +216,7 @@ Apply `supabase/migrations/schema.sql` via the Supabase SQL editor or CLI so tab
 - **documents** — file metadata, `extracted_data`, `verification_status`, `mismatch_fields`
 - **declaration_items** — line items (HS codes, values, optional legal references metadata)
 - **tracking_events**, **border_scans** — tracking and gate-related records
+- **trajectory_points** — raw e-seal points used by Trajectory Guardian
 - **user_profiles**, **system_logs** — directory and audit
 - **ai_assistant_messages**, **ai_model_settings** — assistant history and admin-facing model settings rows
 
